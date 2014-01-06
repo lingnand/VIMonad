@@ -18,6 +18,7 @@ import Data.String.Utils (replace)
 import Foreign.C.Types (CLong)
 import System.IO
 import System.Exit
+import System.Directory
 import Text.Read
 import XMonad
 import XMonad.ManageHook
@@ -39,11 +40,12 @@ import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.SetWMName
 import XMonad.Hooks.FloatNext(runLogHook)
+import qualified XMonad.Hooks.UrgencyHook as U
 import XMonad.Hooks.DynamicHooks
-import XMonad.Layout.Decoration
 import XMonad.Layout.Fullscreen
 {-import XMonad.Layout.LayoutCombinators-}
 import XMonad.Layout.LayoutModifier
+import XMonad.Layout.Decoration
 import XMonad.Layout.Named
 import XMonad.Layout.Grid
 import XMonad.Layout.MultiColumns
@@ -163,9 +165,18 @@ robotTheme = def { activeColor         = myBgHLight
                  , inactiveTextColor   = myFgColor
                  , fontName            = myFont
                  , decoHeight          = 16 
+                 , subThemeForWindow   = \w -> taskGroupOfWindow taskGroups w >>= return . fmap colorScheme
                  }
 
+{-myTabsTheme = robotTheme { subThemeForWindow = \_ -> return Nothing }-}
 myTabsTheme = robotTheme
+mySubTheme = SubTheme { winInactiveColor = inactiveColor myTabsTheme
+                      , winInactiveBorderColor = inactiveBorderColor myTabsTheme
+                      , winInactiveTextColor = inactiveTextColor myTabsTheme
+                      , winActiveColor = activeColor myTabsTheme
+                      , winActiveBorderColor = activeBorderColor myTabsTheme
+                      , winActiveTextColor = activeTextColor myTabsTheme
+                      }
 
 ---- Promptscheme
 myXPConfig = defaultXPConfig { 
@@ -561,34 +572,18 @@ nextFocus (G.Node (W.Stack f u d)) =
 
 --- correct the focus of the window after doing the action 'a'; the rule for correcting is to assume that the current window gets closed after a is applied and the next window in the stack is selected after that
 correctFocus a = withFocused $ \f -> do
-        isf <- gets $ M.member f . W.floating . windowset
+        isf <- runQuery isFloating f
         mgs <- G.getCurrentGStack
         a
-        case maybe Nothing (if isf then G.focal else nextFocus) mgs of
-             Just nw -> withFocused $ \nf -> if nf == nw then return () else focus nw 
-             Nothing -> return ()
+        if isf then nextMatch History $ isInCurrentWorkspace <&&> fmap not isFloating
+               else case fmap nextFocus mgs of
+                        Just (Just nw) -> withFocused $ \nf -> if nf == nw then return () else focus nw 
+                        _ -> return ()
 
--- fix for float toggle: we save the focal window after we go from a tile to a float, and then when we go back, we use that window instead
-data SwitchFloatWindow = SwitchFloatWindow (Maybe Window) deriving (Typeable, Read, Show)
-instance ExtensionClass SwitchFloatWindow where
-    initialValue = SwitchFloatWindow Nothing
-    extensionType = PersistentExtension
-
-revokeSwitchFloatWindow = XS.put $ SwitchFloatWindow Nothing
-
-switchFocusFloat = 
-    withFocused $ \f -> do
-    isf <- gets $ M.member f . W.floating . windowset
-    if isf then do
-               -- go to the stored float value
-               SwitchFloatWindow mw <- XS.get
-               case mw of
-                    Just w -> focus w >> XS.put (SwitchFloatWindow Nothing)
-                    _ -> toggleFocusFloat
-           else do
-               XS.put $ SwitchFloatWindow $ Just f
-               toggleFocusFloat
-
+-- this is conceptually equivalent to navigating back to the last window that's not on the same layer
+switchFocusFloat = withFocused $ \f -> do
+    isf <- runQuery isFloating f
+    nextMatch History $ isInCurrentWorkspace <&&> fmap (if isf then not else id) isFloating
 -- }}}
 
 ---------------- LogHook -- {{{
@@ -596,19 +591,11 @@ myLogHook toggleFadeSet dzenLogBar = do
     -- for java 
     takeTopFocus
     statusLogHook dzenLogBar
-    fadeLogHook toggleFadeSet defaultFadeInactiveAmount   
+    WallPaperToggleState ts <- XS.get
+    if not ts then fadeOutLogHook $ fadeIf (defaultFadeTest toggleFadeSet) defaultFadeInactiveAmount else return ()
     historyHook
 
 ---- fade Log hook-- {{{
--- fade all windows according to the testCondition (the default behavior for fading windows) and toggle the WallPaperToggleState to False (meaning that wallpaper 'shining through' mode is now off)
-fadeLogHook toggleFadeSet amount = 
-    do
-        -- get the classname of the current focused window
-        fadeOutLogHook $ fadeIf (testCondition toggleFadeSet) amount
-        -- toggle the wallpaper state if necessary
-        (WallPaperToggleState ts) <- XS.get
-        XS.put (WallPaperToggleState False)
-
 ------- the conditions for fading windows in normal circumstances
 -- not used currently
 isFloating :: Query Bool
@@ -621,7 +608,7 @@ disableFadingWithinClassName cn = liftM not (className =? cn <&&> (liftX  $ focu
 disableFadingWithinClassNames = disableFadingWithinClassName "jetbrains-idea"
    
 -- tests if a window should be faded; floats are the windows that have been toggled by the user to not fade
-testCondition floats =
+defaultFadeTest floats =
     liftM not doNotFadeOutWindows <&&> isUnfocused <&&> disableFadingWithinClassNames <&&> (join . asks $ \w -> liftX . io $ S.notMember w `fmap` readIORef floats)
      
 -- toggles whether the given window should be faded out (by toggling its reference in a set
@@ -635,12 +622,15 @@ toggleFadeOut w s
 ----- status bar stuff-- {{{
 
 -- pretty printing for history stack status
-printHistoryStatus = do
+printLayoutInfo = do
     isAuto <- getCurrentWorkspaceHandle >>= isAutoArrangeWorkspace 
     s <- getMarkedWindowsSize
+    InsertOlderToggle t <- XS.get
     let (plus, c) = if s == 0 then (" ", myFgColor) else ("+", myNotifyColor)
         [lb,rb] = fmap (dzenColor myFgColor myBgColor) $ ["[","]"]
-    return $ Just $ lb++(if isAuto then dzenColor myNotifyColor myBgColor "A" else "M")++"-"++dzenColor c myBgColor plus++rb
+        autoIndicator = if isAuto then dzenColor myNotifyColor myBgColor "A" else "M"
+        insertOlderIndicator = if t then dzenColor myNotifyColor myBgColor "O" else "N"
+    return $ Just $ lb++autoIndicator++insertOlderIndicator++"-"++dzenColor c myBgColor plus++rb
 
 -- pretty printing for groupNames
 printGroupNames [] = ""
@@ -718,11 +708,12 @@ statusLogHook h =  do
     {-ld <- gets (description . W.layout . W.workspace . W.current . windowset)-}
     {-spawn $ "echo '"++ld++"' > ~/.xmonad/xmonad.test"-}
     pp <- workspaceNamesPP $ defaultPP {
-        ppCurrent       = dzenColor myTextHLight myBgColor  . pad 
-        , ppVisible     = dzenColor myFgHLight myBgColor    . pad 
-        , ppHidden      = dzenColor myFgColor myBgColor     . pad 
-        , ppHiddenNoWindows = dzenColor myFgDimLight myBgColor . pad 
-        , ppWsSep       = ""
+          ppCurrent       = dzenColor myTextHLight myBgColor
+        , ppVisible     = dzenColor myFgHLight myBgColor
+        , ppUrgent      = dzenColor myNotifyColor myBgColor . dzenStrip
+        , ppHidden      = dzenColor myFgColor myBgColor
+        , ppHiddenNoWindows = dzenColor myFgDimLight myBgColor
+        , ppWsSep       = "  "
         , ppSep         = "  "
         , ppLayout      = let iconify w = case w of
                                 "Mirror ZoomRow"      ->      "^i(" ++ myBitmapsDir ++ "/grid.xbm)"
@@ -736,7 +727,7 @@ statusLogHook h =  do
         , ppOrder   =  \(ws:l:t:hist:gp:hid:xs) -> [ws,l,hist,hid,gp] ++ xs
         , ppSort        = fmap (.scratchpadFilterOutWorkspace) myWorkspaceSort
         , ppOutput      = hPutStrLn h
-        , ppExtras      = [  printHistoryStatus
+        , ppExtras      = [  printLayoutInfo
                            , do
                                mgs <- G.getCurrentGStack
                                {-spawn $ "echo '"++(show mgs)++"' > ~/.xmonad/xmonad.test"-}
@@ -746,6 +737,9 @@ statusLogHook h =  do
                            {-return $ Just $ joinStr "  " gns-}
                            , do
                                ls <- getCurrentMinimizedWindows
+                               -- test if the current focused window is inside the list, correct that
+                               withFocused $ \f -> if f `elem` ls then G.getCurrentGStack >>= maybe (return ()) focus . maybe Nothing G.focal
+                                                                  else return ()
                                {-spawn $ "echo '"++(show ls)++"' > ~/.xmonad/xmonad.test"-}
                                tgs <- taggedGStack taskGroups (G.fromZipper (W.differentiate $ reverse ls) 1) 
                                {-spawn $ "echo '"++(show $ infoFromTaggedGStack tgs)++"' > ~/.xmonad/xmonad.test"-}
@@ -758,15 +752,15 @@ statusLogHook h =  do
 -- this method will return the log bar instance for xmonad to pipe the output to
 myStatusBars = do
     w <- fmap (read . head . lines) $ runProcessWithInput "screen-res" ["width"] ""
-    let trayerx = w - trayerw
-        trayerw = 20
+    let xbarx = 0
+        xbarw = statbarx + myDzenBarOverlap
+        {-trayerx = w - trayerw-}
+        {-trayerw = 20-}
         {-musicx = w * 2/3-}
         {-musicw = statbarx - musicx + myDzenBarOverlap-}
-        xbarx = 0
-        xbarw = statbarx + myDzenBarOverlap
-        statbarw = 480 + myDzenBarOverlap
-        statbarx = w - trayerw - statbarw
-        myTrayer = trayer "top" "right" trayerw myDzenBarHeight myBgColor 0
+        statbarw = 576
+        statbarx = w - statbarw
+        {-myTrayer = trayer "top" "right" trayerw myDzenBarHeight myBgColor 0-}
         myDzenBar x w a = dzenBar x 0 w myDzenBarHeight a myFgColor myBgColor myDzenFont
         myLogBar = myDzenBar xbarx xbarw "l"
         {-myMusicBar = pipe (conky $ myXMonadDir++"/.conky_dzen_music") (myDzenBar musicx musicw "l")-}
@@ -777,7 +771,7 @@ myStatusBars = do
     {-spawn myMusicBar-}
     spawn myStatBar
     -- put up trayer
-    spawn myTrayer
+    {-spawn myTrayer-}
     return handle
 -- }}}
 
@@ -788,16 +782,48 @@ myStatusBars = do
 -- due to some reasons it appears that the startWSSwitchHook has some conflicts with the handleKeyEventForXMonadMode hook
 myHandleEventHook toggleFadeSet e = do
     startWSSwitchHook e 
-    wallpaperEventHook toggleFadeSet e 
     handleKeyEventForXMonadMode e
 
 -- }}}
 
 ---------------- ManageHook -- {{{
 
+-- a toggle to define the insertion order of newly created windows
+data InsertOlderToggle = InsertOlderToggle Bool deriving (Typeable, Read, Show)
+instance ExtensionClass InsertOlderToggle where
+    initialValue = InsertOlderToggle False
+    extensionType = PersistentExtension
+
+-- the first bool indicate whether a backup is in action; the second one is the actual backup
+data InsertOlderToggleBackUp = InsertOlderToggleBackUp (Bool,Bool) deriving (Typeable, Read, Show)
+instance ExtensionClass InsertOlderToggleBackUp where
+    initialValue = InsertOlderToggleBackUp (False,False)
+    extensionType = PersistentExtension
+
+toggleInsertOlderForce = do
+    InsertOlderToggle t <- XS.get
+    XS.put $ InsertOlderToggleBackUp (True, t)
+    XS.put $ InsertOlderToggle True
+
+toggleInsertOlderRecover = do
+    InsertOlderToggleBackUp (h, b) <- XS.get
+    if h then do
+        XS.put $ InsertOlderToggleBackUp (False, False)
+        XS.put $ InsertOlderToggle b
+         else return ()
+
+toggleInsertOlder = do
+    XS.put $ InsertOlderToggleBackUp (False, False)
+    InsertOlderToggle t <- XS.get
+    XS.put $ InsertOlderToggle $ not t
+
+insertPositionHook = ask >>= \w -> do
+    tog <- liftX $ XS.get >>= \(InsertOlderToggle t) -> return t
+    insertPosition Above $ if tog then Older else Newer
+
 myManageHook = composeAll [ 
-      {-insertPosition Above Older-}
-      autoArrangeHook taskGroups
+      insertPositionHook
+    , autoArrangeHook taskGroups
     , dynamicMasterHook
     , isFullscreen --> doFullFloat  
     -- gimp related stuff
@@ -809,7 +835,18 @@ myManageHook = composeAll [
       -- }}}
 
 ---------------- Scratchpad -- {{{
-mkNamedScratchpad ls name = revokeSwitchFloatWindow >> namedScratchpadAction ls name
+mkNamedScratchpad ls n = 
+    case filter ((n==) . name) ls of
+         sp:_ -> ifWindows (isMinimized <&&> query sp) (\(w:_) -> do
+             deminimize w
+             -- if it is in the current workspace then their is no need to do namedscratchpadaction anymore
+             r <- runQuery isInCurrentWorkspace w
+             if r then focus w else nsc
+             ) nsc
+         _ -> nsc
+        where nsc = namedScratchpadAction ls n
+
+isPidginBuddyList = className =? "Pidgin" <&&> propertyToQuery (Role "buddy_list")
 
 scratchpads :: [NamedScratchpad]
 scratchpads = [
@@ -817,7 +854,8 @@ scratchpads = [
     {-NS "ranger" (myTerminal++" -name sranger -T ranger -e zsh -ic ranger") (appName =? "sranger") -}
     {-(customFloating $ W.RationalRect (0) (1/2) (1) (1/2)),-}
 
-      NS "mutt" (uniqueTermFullCmd "" uniqueMutt) (isUniqueTerm uniqueMutt) lowerHalfRectHook
+      NS "mutt" (uniqueTermFullCmd "" uniqueMutt) (isUniqueTerm uniqueMutt) lowerHalfRectHook,
+      NS "pidgin" "pidgin" isPidginBuddyList idHook
     ] 
 
 ---- perWorkspaceScratchpads are scratchpads that are workspace specific
@@ -897,8 +935,8 @@ setWorkspaceNameByTag t n = getWorkspaceHandle t >>= \h -> setWorkspaceName h n
 setCurrentWorkspaceName n = getCurrentWorkspaceHandle >>= \h -> setWorkspaceName h n
 
 -- a set of positions to simulate those used in Vim as i,a,I,A respectively
-data InsertPosition = Before | After | Head | Last
-instance Show InsertPosition where
+data WorkspaceInsertPosition = Before | After | Head | Last
+instance Show WorkspaceInsertPosition where
     show Before = "insert before"
     show After = "insert after"
     show Head = "insert head"
@@ -1034,7 +1072,7 @@ workspacePrompt conf p ef f = do
             -- set the workspaceDirectory
             output <- runProcessWithInput "symtag" ("print" : if '/' `elem` s then ["true", "%p", "1", ".*"++s] else ["false", "%p", "1", ".*"++s++".*"]) ""
             let ls = lines output
-            let path = if null ls then "" else trim $ head $ ls
+            let path = if null s || null ls then "" else trim $ head $ ls
                 name = if null ltag then s 
                                     else if ' ' `elem` ltag then fmap head $ filter (not . null) $ splitOn " " ltag
                                     else if '_' `elem` tltag then fmap head $ filter (not . null) $ splitOn "_" ltag
@@ -1076,7 +1114,8 @@ removeCurrentWorkspace = do
             windows $ removeWorkspaceByTag curr
             removeWorkspaceHandleByTag curr
             renameWorkspaces (zip aft $ fmap wrapList $ symbolFrom $ head curr)
-       else return ()
+        -- we'd like to remove the name and directory setting for the temp workspace in that case
+       else setCurrentWorkspaceName "" >> saveCurrentWorkspaceDirectory ""
 
 -- assume that the workspace to be removed is in the hidden workspaces list
 removeWorkspaceByTag t s@(W.StackSet { W.hidden = hs })
@@ -1112,91 +1151,30 @@ renameWorkspaces ls = do
              , W.hidden = nhws
              }
 
-{-clearWorkspacesAfter = do-}
-    {--- we can savely remove the workspace if all the workspaces after this workspace are empty-}
-    {-currTag <- gets (W.currentTag . windowset)-}
-    {--- we need to first sort the workspaces-}
-    {-wss <- allWorkspaces-}
-    {-recyclable <- isRecyclableWS-}
-    {-let ts = tail $ dropWhile ((/= currTag) . W.tag) wss-}
-    {-clearWorkspacesFromHeadInList recyclable (reverse ts)-}
-     
-{-clearWorkspacesFromHeadInList isRecyclable ls -}
-    {-| null ls = return True-}
-    {-| isRecyclable h = eraseWorkspace (W.tag h) >> clearWorkspacesFromHeadInList isRecyclable (tail ls) -}
-    {-| otherwise = return False -}
-        {-where h = head ls-}
-
-
-
 -- }}}
 
 ---------------- Wallpaper changer-- {{{
 
------ Automatic wallpaper changing states ------
-------------------------------------------------
 data WallPaperTidState = WallPaperTidState TimerId deriving Typeable
 instance ExtensionClass WallPaperTidState where
     initialValue = WallPaperTidState 0
-
--- change the wallpaper for the first time, and then start the initial timer, store its id
-wallpaperAutomaticStartHook = do
-    spawn changeWallpaperCmd
-    startTimer wallpaperChangeInterval >>= XS.put . WallPaperTidState
--- disabling the automatic fading in/out mechanism as that's too much distraction
-wallpaperAutomaticChangeHook toggleFadeSet = do
-    {-startTimer wallpaperRecoverInterval >>= XS.put . SleepTidState   -- start the wallpaper sleep timer -}
-    spawn changeWallpaperCmd
-    {-fadeLogHook toggleFadeSet wallpaperFadeInactiveAmount-}
-
------ Wallpaper gallery mode -----
-----------------------------------
 
 -- wallpaperToggle is designed to toggle the window opacity and STAYS
 data WallPaperToggleState = WallPaperToggleState Bool deriving Typeable
 instance ExtensionClass WallPaperToggleState where
     initialValue = WallPaperToggleState False
 
-getWallpaperToggleState = XS.get >>= \(WallPaperToggleState s) -> return s
-
 -- the hook tries to execute the command (presumably related to changing the wallpaper) and fade ALL windows for wallpaper to shine through if they are not already faded
 wallpaperChangeFadeFullHook cmd = do
-        ts <- getWallpaperToggleState
-        -- if true; then it means it's already in wallpaper gallery mode (no need to fade windows then)
-        if ts then spawn cmd
-              else do
-                -- it's not in wallpaper gallery mode; trying to fade the windows TEMPORARILY
-                spawn cmd
-                -- sets up the timer which when gone off repaints the windows in the normal way
-                startTimer wallpaperFullRecoverInterval >>= XS.put . SleepTidState   
-                -- paint the temporary transparency
-                fadeOutLogHook $ fadeIf (return True) wallpaperFadeFullAmount
+        spawn cmd
+        fadeOutLogHook $ fadeIf (return True) wallpaperFadeFullAmount
+        XS.put $ WallPaperToggleState True
 
 -- toggle the wallpaper toggle state; toggle the wallpaper gallery mode
 wallpaperToggleHook toggleFadeSet = do 
-        ts <- getWallpaperToggleState
-        if ts 
-           then do
-               XS.put (WallPaperToggleState False)
-               fadeLogHook toggleFadeSet defaultFadeInactiveAmount
-            else do 
-                XS.put (WallPaperToggleState True)
-                fadeOutLogHook $ fadeIf (return True) wallpaperFadeFullAmount
-
-
------ The lingering off of wallpaper shining through after each wallpaper change command is issued -----
---------------------------------------------------------------------------------------------------------
--- SleepTidState is the concept that whenever this state gets invoked by the timer then that means the lingering off should stop and the windows should repaint in the normal way
-data SleepTidState = SleepTidState TimerId deriving Typeable
-instance ExtensionClass SleepTidState where
-    initialValue = SleepTidState 0
-
------ The eventual wallpaper clock event handler ----
------------------------------------------------------
-wallpaperEventHook toggleFadeSet e = do
-    SleepTidState st <- XS.get 
-    handleTimer st e $ fadeLogHook toggleFadeSet defaultFadeInactiveAmount >> return Nothing
-    return $ All True
+        WallPaperToggleState ts <- XS.get
+        XS.put $ WallPaperToggleState $ not ts
+        fadeOutLogHook $ if ts then fadeIf (defaultFadeTest toggleFadeSet) defaultFadeInactiveAmount else fadeIf (return True) wallpaperFadeFullAmount
 -- }}}
 
 ---------------- Start workspace transition timer -- {{{
@@ -1224,6 +1202,66 @@ completionFunctionWith cmd args = do fmap lines $ runProcessWithInput cmd args "
 -- | Creates a prompt with the given modes
 launcherPrompt :: XPConfig -> [XPMode] -> X()
 launcherPrompt config modes = mkXPromptWithModes modes config
+
+----- Dynamic prompt -- {{{
+dphandler = myScriptsDir++"/dphandler"
+
+data DynamicPrompt = DPrompt String
+
+stripSuffix suf s = fmap reverse $ stripPrefix (reverse suf) (reverse s)
+isOutput = (>= outputWidth) . length
+
+instance XPrompt DynamicPrompt where
+    showXPrompt (DPrompt dir) = dir ++ " > "
+    commandToComplete _ = id
+    nextCompletion _ c l
+        | isOutput (head l) = c
+        | otherwise = case args of
+             [] -> escape $ head l
+             _ -> fromMaybe "" (stripSuffix lastArg c) ++ (escape $ l !! case findIndex (== unescape lastArg) l of
+                                                       Just i -> if i >= length l - 1 then 0 else i+1
+                                                       Nothing -> 0)
+             where lastArg = last $ args
+                   args = parseShellArgs c
+    highlightPredicate _ cl cmd
+        | isOutput cl = False
+        | otherwise = not (null args) && unescape (last args) == cl 
+             where args = parseShellArgs cmd
+
+outputWidth = 200
+
+homeShorten dir = do
+    home <- io $ env "HOME" "/home/lingnan"
+    return $ maybe dir ("~"++) $ stripPrefix home dir
+
+parseShellArgs str = let tk b a = if null a || (head a == ' ' && not (null b) && head b /= '\\')
+                                      then (if null b then [] else [reverse b], a)
+                                      else tk (head a:b) (tail a)
+                         (arg, rest) = tk "" (dropWhile (==' ') str)
+                     in if null rest then arg else arg ++ parseShellArgs rest
+
+unescape = let tk b cked a = case (b, a, cked) of
+                                (_,       [],      _) -> reverse b
+                                ('\\':bs, '\\':as, False) -> tk b True as 
+                                ('\\':bs, ha:as,   False) -> tk (ha:bs) False as 
+                                (_,       ha:as,   _) -> tk (ha:b) False as 
+           in tk "" False
+
+dynamicPrompt c = do
+    cmds <- io getCommands
+    dir <- getCurrentWorkspaceDirectory
+    shortened <- homeShorten dir
+    io $ setCurrentDirectory dir
+    let compfun s = do
+            let args = parseShellArgs s
+                lastArg = if null args then "" else last args
+            -- first unescape the string into a list
+            case (map unescape args, last s) of
+               ("man":pa:pas, ' ') -> fmap (map (fillSpace outputWidth) . lines) $ runProcessWithInput (myScriptsDir++"/man") (pa:pas) ""
+               _ -> fmap (filter ((searchPredicate c) (unescape lastArg))) $ getShellComplWithDir dir False cmds lastArg
+    mkXPrompt (DPrompt shortened) c compfun $ \s -> 
+        spawn $ shellFullCmd (dphandler++" "++if null s then "." else s) dir
+-- }}}
 
 ----- Calculator prompt -- {{{
 
@@ -1347,36 +1385,6 @@ waMode = XPT WAMode
 
 ----- Window search prompt -- {{{
 
--- incremental search function 
-
-{-data HistoryHookSwitch = HistoryHookSwitch Bool deriving (Typeable, Show, Read)-}
-
-{-instance ExtensionClass HistoryHookSwitch where-}
-    {-initialValue = HistoryHookSwitch True-}
-    {-extensionType = PersistentExtension-}
-
-{-data IncSearchMode = IncSearchMode { predicate :: Query Bool-}
-                                   {-, config :: XPConfig }-}
-{-instance XPrompt IncSearchMode where-}
-    {-showXPrompt _ = "/"-}
-    {-commandToComplete _ = id-}
-    {-completionFunction (IncSearchMode p c) = \s -> do-}
-        {-wm <- windowMap-}
-        {--- filter the windows according to p-}
-        {-matches <- filterM (runQuery p . snd) $ M.toList wm-}
-        {-let ls = filter (searchPredicate c . fst) matches-}
-        {--- go to the first match in the list-}
-        {--- going to do some really nasty stuff here (if really want... -}
-        {-XS.put $ HistoryHookSwitch False-}
-        {-focus $ snd $ head ls-}
-        {-XS.put $ HistoryHookSwitch False-}
-        {-return $ ls-}
-    {-modeAction (IncSearchMode p c) cpl _ = do-}
-        {-wm <- windowMap-}
-        {-whenJust (M.lookup cpl wm) $ focus-}
-
-{-mkIncSearchPrompt c = mkXPromptWithModes [IncSearchMode isInCurrentWorkspace c, IncSearchMode alwaysTrue c] c-}
-
 data WindowSearchPrompt = WindowSearchPrompt String
 instance XPrompt WindowSearchPrompt where
     showXPrompt (WindowSearchPrompt p) = p
@@ -1394,7 +1402,6 @@ mkSearchPrompt config prompt predicate a = do
 -- }}}
 
 -- }}}
-
 
 ---------------- History window states -- {{{
 
@@ -1492,11 +1499,19 @@ getLastCommand = XS.get >>= \(LastCommand a) -> return a
 -- the cycling protocol is useful for a set of windows matching a query; useful for task groups, etc.
 cycleMatchingOrDo qry dir f d = do
     -- get all the windows before the focused and after the focused depending on the direction
-    (l, r, ml, ll, rl) <- getSides
-    -- we modify the order such that the windows in the current workspace alway take priority
-    let winl = case dir of
-                    Prev -> reverse (r ++ l ++ ml ++ rl ++ ll)
-                    Next -> r ++ l ++ ml ++ rl ++ ll
+    (l, r, gf, ml, float, ll, rl) <- getSides
+    -- get the focused window
+    mf <- gets (W.peek . windowset)
+    let wwins = rl ++ ll
+        (awinr, awinl, bwins, cwins) = case mf of
+                        Just f 
+                            | [f] == gf -> (r, l, float, ml)
+                            | otherwise -> case break (==f) float of
+                                (fl, _:fr) -> (fr, fl, l++gf++r, ml)
+                                -- the focus is neither on the focal of the stack nor on float (something is wrong)
+                                _ -> ([], [], [], [])
+                        _ -> ([], [], [], [])
+        winl = if dir == Next then awinr++awinl++bwins++cwins++wwins else reverse $ wwins++cwins++bwins++awinr++awinl
     matches <- filterM (runQuery qry) winl
     case matches of
          [] -> d
@@ -1505,42 +1520,47 @@ cycleMatchingOrDo qry dir f d = do
 getSides = do
     -- get all the windows before the focused and after the focused depending on the direction
     wss <- allWorkspaces
-    -- select the current one 
-    cur <- gets (W.currentTag . windowset)
+    winset <- gets windowset
     -- split the windows into two
     -- it's safer to get the windows for the current workspace from group stacks (it's more stable)
     gs <- G.getCurrentGStack
     ml <- fmap reverse getCurrentMinimizedWindows
     let (l, r) = maybe ([],[]) lrs gs
-        (b, a') = break ((==cur). W.tag) wss
+        gf = maybeToList $ maybe Nothing G.focal gs
+        (b, a') = break ((==W.currentTag winset). W.tag) wss
         a = if not $ null a' then tail a' else []
         ll = nub $ concatMap (W.integrate' . W.stack) b
         rl = nub $ concatMap (W.integrate' . W.stack) a
-    return (l, r, ml, ll, rl)
+        -- also retrieve the float windows (for comprehensiveness)
+        currswins = W.integrate' $ W.stack $ W.workspace $ W.current winset
+        float = filter (not . (`elem` (l++r++ml++gf))) currswins 
+    return (l, r, gf, ml, float, ll, rl)
         where lrs (G.Leaf (Just (W.Stack f u d))) = (reverse u, d)
               lrs (G.Leaf Nothing) = ([], [])
               lrs (G.Node (W.Stack f u d)) = let (l, r) = lrs f in (concatMap G.flattened (reverse u) ++ l, r ++ concatMap G.flattened d)
 
     -- implementation that uses the group stacks instead
 cycleMatchingOrDoSaved qry dir f d = saveFindFunction (\dr -> cycleMatchingOrDo qry (if dr == dir then Next else Prev) f d) >> cycleMatchingOrDo qry dir f d
-cycleMatching qry dir = cycleMatchingOrDoSaved qry dir (focus . head) (return ())
+cycleMatching qry dir = cycleMatchingOrDoSaved qry dir (deminimizeFocus . head) (return ())
 
 data TaskGroup = TaskGroup { taskGroupName :: String
-                                 -- ^ the name given for this task group
-                               , filterKey :: String
-                                 -- ^ the filter key used in key sequences to select this group, an empty string means 
-                                 -- this group should not be filtered using key sequence
-                               , filterPredicate :: Query Bool
-                                 -- ^ the query bool used to filter this group 
-                               , localFirst :: Bool
-                                 -- ^ should any filtering occur on a local workspace first order
-                               , construct :: X ()
-                                 -- ^ hook that gets called when a new window should be replicated; returns True if successfully constructed
-                               , launchHook :: ManageHook
-                                 -- ^ hook that gets called during the first launch of the window (in the managehook)
-                               , windowStyle :: Direction1D -> ManageHook
-                                 -- ^ a function that returns a style (manageHook) given an index
-                               }
+                             -- ^ the name given for this task group
+                           , filterKey :: String
+                             -- ^ the filter key used in key sequences to select this group, an empty string means 
+                             -- this group should not be filtered using key sequence
+                           , filterPredicate :: Query Bool
+                             -- ^ the query bool used to filter this group 
+                           , localFirst :: Bool
+                             -- ^ should any filtering occur on a local workspace first order
+                           , construct :: X ()
+                             -- ^ hook that gets called when a new window should be replicated; returns True if successfully constructed
+                           , launchHook :: ManageHook
+                             -- ^ hook that gets called during the first launch of the window (in the managehook)
+                           , windowStyle :: Direction1D -> ManageHook
+                             -- ^ a function that returns a style (manageHook) given an index
+                           , colorScheme :: SubTheme
+                             -- ^ tab color definitions
+                           }
 
 instance Eq TaskGroup where
     t == t' = (taskGroupName t) == (taskGroupName t') && (filterKey t) == (filterKey t')
@@ -1588,6 +1608,8 @@ windowStyleFromList ls dir
     
 lowerHalfRectHook = customFloating $ W.RationalRect (0) (1/2) (1) (1/2)
 upperHalfRectHook = customFloating $ W.RationalRect (0) (0) (1) (1/2)
+rightPanelHook = customFloating $ W.RationalRect (4/5) (14/900) (1/5) (1-14/900)
+leftPanelHook = customFloating $ W.RationalRect (0) (14/900) (1/5) (1-14/900)
 
 instance Default TaskGroup where 
     def = TaskGroup { taskGroupName = "Unknown"
@@ -1598,6 +1620,7 @@ instance Default TaskGroup where
                       , launchHook = idHook
                       -- the default window styles involving
                       , windowStyle = windowStyleFromList [doSink, lowerHalfRectHook]
+                      , colorScheme = mySubTheme
                       }
 
 taskGroups = [ 
@@ -1605,13 +1628,25 @@ taskGroups = [
       def { taskGroupName = "vimb"
           , filterKey = "b"
           , filterPredicate = className =? "Vimb"
-          , construct = runShell "vimb \"`tail -n1 ~/.config/vimb/history | cut -d'\t' -f1`\""
+          {-, construct = runShell "vimb \"`tail -n1 ~/.config/vimb/history | cut -d'\t' -f1`\""-}
+          , construct = runShell "vb"
           {-, launchHook = ask >>= doF . -}
+          -- green
+          , colorScheme = mySubTheme { winInactiveColor = "#1d371d"
+                                     , winActiveColor = "#337f33"
+                                     , winActiveBorderColor = "#1d371d"
+                                     }
           }
+     -- zathura instances
     , def { taskGroupName = "zathura"
           , filterKey = "z"
           , filterPredicate = className =? "Zathura"
           , construct = spawn "zathura"
+          -- red
+          , colorScheme = mySubTheme { winInactiveColor = "#371921"
+                                     , winActiveColor = "#7f334a"
+                                     , winActiveBorderColor = "#371921"
+                                     }
           }
       -- notice: group selection that applies to these 'hidden' groups (namely triggered by auto-group when one of the windows is in focus), will still apply to all matched windows
       -- mutt scratchpad singleton
@@ -1639,21 +1674,39 @@ taskGroups = [
           {-, windowStyle = windowStyleFromList [lowerHalfRectHook, upperHalfRectHook, doSink]-}
           {-}-}
       -- weechat singleton
-    , def { taskGroupName = "weechat"
-          , filterKey = "w"
-          , filterPredicate = isTerm <&&> (fmap ("weechat" `isInfixOf`) title <||> appName =? "weechat")
-          , localFirst = False
-          {-, launchHook = liftX (findWorkspaceWithName "comm") >>= doViewShift-}
-          {-, construct = runUniqueTerm "" uniqueWeechat-}
-          , construct = runTerm "weechat" "weechat" "loader weechat-curses -r '/redraw'"
-          }
+    {-, def { taskGroupName = "weechat"-}
+          {-, filterKey = "w"-}
+          {-, filterPredicate = isTerm <&&> (fmap ("weechat" `isInfixOf`) title <||> appName =? "weechat")-}
+          {-, localFirst = False-}
+          {-[>, launchHook = liftX (findWorkspaceWithName "comm") >>= doViewShift<]-}
+          {-[>, construct = runUniqueTerm "" uniqueWeechat<]-}
+          {-, construct = runTerm "weechat" "weechat" "loader weechat-curses -r '/redraw'"-}
+          {-}-}
       -- finch singleton
-    , def { taskGroupName = "finch"
-          , filterKey = "f"
-          , filterPredicate = isUniqueTerm uniqueFinch
-          , localFirst = False
-          {-, launchHook = liftX (findWorkspaceWithName "comm") >>= doViewShift-}
-          , construct = runUniqueTerm "" uniqueFinch
+    {-, def { taskGroupName = "finch"-}
+          {-, filterKey = "f"-}
+          {-, filterPredicate = isUniqueTerm uniqueFinch-}
+          {-, localFirst = False-}
+          {-[>, launchHook = liftX (findWorkspaceWithName "comm") >>= doViewShift<]-}
+          {-, construct = runUniqueTerm "" uniqueFinch-}
+          {-}-}
+      -- pidgin buddylist
+    , def { taskGroupName = "pidgin-buddy"
+          , filterPredicate = isPidginBuddyList
+          , launchHook = rightPanelHook
+          , construct = mkNamedScratchpad scratchpads "pidgin"
+          , windowStyle = windowStyleFromList [rightPanelHook, leftPanelHook, doSink]
+          }
+      -- pidgin conversation windows
+    , def { taskGroupName = "pidgin"
+          , filterKey = "d"
+          , filterPredicate = className =? "Pidgin"
+          , construct = mkNamedScratchpad scratchpads "pidgin"
+          -- purple
+          , colorScheme = mySubTheme { winInactiveColor = "#231536"
+                                     , winActiveColor = "#6a4d99"
+                                     , winActiveBorderColor = "#231536"
+                                     }
           }
       -- intellij singleton
     , def { taskGroupName = "idea"
@@ -1686,12 +1739,22 @@ taskGroups = [
           , filterKey = "r"
           , filterPredicate = isTerm <&&> (title =? "ranger" <||> appName =? "ranger")
           , construct = runTerm "ranger" "ranger" "loader ranger"
+          -- yellow
+          , colorScheme = mySubTheme { winInactiveColor = "#353119"
+                                     , winActiveColor = "#7f7233"
+                                     , winActiveBorderColor = "#353119"
+                                     }
           }
       -- vim intances
     , def { taskGroupName = "vim"
           , filterKey = "v"
           , filterPredicate = isTerm <&&> (appName =? "vim" <||> fmap (\s -> (" - VIM" `isInfixOf` s) && (not $ isInfixOf "vimpager" s)) title)
           , construct = runShell "xvim"
+          -- brown
+          , colorScheme = mySubTheme { winInactiveColor = "#372517"
+                                     , winActiveColor = "#7f5233"
+                                     , winActiveBorderColor = "#372517"
+                                     }
           }
       -- recyclable term instances (m-s-<Return> triggers the same event)
     , def { taskGroupName = "term"
@@ -1724,11 +1787,9 @@ siftTaskGroups gs = if len <= 1 then gs else head gs : fmap loadExQueryForGroupA
 
 -- this dynamic lookup on the window group should return the window group with the filter predicate SIFTED
 taskGroupOfWindow :: [TaskGroup] -> Window -> X (Maybe TaskGroup)
-taskGroupOfWindow gs win = filterM (\g -> runQuery (filterPredicate g) win) gs >>= \l -> return $ if null l then Nothing else Just $ head l
+taskGroupOfWindow gs win = taskGroupIndexOfWindow gs win >>= return . fmap (gs !!)
 
-siftedTaskGroupOfWindow gs win = do
-    i <- taskGroupIndexOfWindow gs win
-    return $ fmap (siftTaskGroups gs !!) i
+siftedTaskGroupOfWindow gs win = taskGroupIndexOfWindow gs win >>= return . fmap (siftTaskGroups gs !!)
 
 -- this will cycle through the groups of windows, conceivably.
 taskGroupIndexOfWindow gs win = if null gs then return Nothing else nextMatch win 0 
@@ -1812,6 +1873,8 @@ runManageHookOnFocused = withFocused . runManageHook
 mountDupKeys dupKeys ls = 
     ls ++ fmap (\(k, ok) -> (k, maybe (return ()) snd $ find ((== ok) . fst) ls)) dupKeys
 
+appendActionWithException a ex ls = ex ++ fmap (\(k, ka) -> (k, ka >> a ka)) ls
+
 -- the normal typableChars
 typeables = ['0'..'9']++['a'..'z']++['A'..'Z']++"!@#$%^&*()-_=+\\|`~[{]}'\",<.>?"
 typeablesNoSlash = filter (/='/') typeables
@@ -1830,19 +1893,31 @@ shiftWindowsHere wins = do
           
 hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 
-modFocusTaggedGlobal t = do
-    (l, r, ml, ll, rl) <- getSides
-    return $ focusTagged (r++ml++l++rl++ll) t
-
 myKeys toggleFadeSet = 
-    fmap (\(k, a) -> (k, a >> saveLastCommand a)) 
-    (mountDupKeys
+    ----- dup key-- {{{
+    mountDupKeys
     [
       ("M1-C-0", "M1-C-1")
     ] 
-    
+    -- }}}
+    ----- Repeat-- {{{
     $
-
+    appendActionWithException saveLastCommand
+    [ 
+      ("M-.", getLastCommand >>= id)
+    ]
+    -- }}}
+    ----- wallpaper revoke -- {{{
+    $
+    appendActionWithException (\_ -> XS.put $ WallPaperToggleState False)
+    [ ("M-S-x", wallpaperChangeFadeFullHook changeWallpaperCmd)
+    , ("M-x", wallpaperToggleHook toggleFadeSet)
+    , ("M-C-x d", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -D")
+    , ("M-C-x f", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -F")
+    , ("M-C-x e", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -E")
+    ]
+    -- }}}
+    $
     [ 
     ----- XMonadMode manipulation-- {{{
     -- we need to call runLogHook to force an update to the log hook
@@ -1862,6 +1937,8 @@ myKeys toggleFadeSet =
     -- common definitions of some of the classes
     , ("M-C-]", cycleTaskGroups Next)
     , ("M-C-[", cycleTaskGroups Prev)
+    , ("M-[ u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+    , ("M-] u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
     ]
     -- cycling task group by number
     ++ 
@@ -1946,7 +2023,7 @@ myKeys toggleFadeSet =
     , ("<F12>", spawn $ "amixer set Master 2+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
     -- }}}
     ----- Prompts-- {{{
-    , ("M-r", shellPrompt myXPConfig {autoComplete = Nothing})
+    , ("M-r", dynamicPrompt myXPConfig {autoComplete = Nothing, searchPredicate = prefixSearchPredicate})
     , ("M-b", vbPrompt)
     -- xmonad commands
     , ("M-C-,", xmonadPrompt myXPConfig {autoComplete = Nothing})
@@ -1968,12 +2045,11 @@ myKeys toggleFadeSet =
                   [("/", tagPrompt myXPConfig {searchPredicate = prefixSearchPredicate})]
     , (modk, a) <- [
           ("m", withFocused . addTag)
+          -- automatically minimizing the current window on marking
         , ("S-m", \t -> withFocused $ \f -> do
                 addTag t f 
                 correctFocus $ minimizeWindow f)
-        , ("'", \t -> cycleMatchingOrDoSaved (hasTagQuery t) Next (\wins -> do
-             deminimizeFocus $ head wins
-          ) (return ()))
+        , ("'", \t -> cycleMatching (hasTagQuery t) Next)
         , ("S-'", \t -> cycleMatchingOrDoSaved (hasTagQuery t <&&> isInCurrentWorkspace) Next shiftWindowsHere (return ()))
         , ("C-S-'", \t -> cycleMatchingOrDoSaved (hasTagQuery t) Next shiftWindowsHere (return ()))] ]
     ++
@@ -2062,6 +2138,7 @@ myKeys toggleFadeSet =
     , ("M-C-S-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupDown)
     , ("M-C-S-h", sendMessage $ G.Modify G.swapGroupUp)
     , ("M-C-S-l", sendMessage $ G.Modify G.swapGroupDown)
+    , ("M-C-S-s", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.splitGroup)
 
     , ("M-S-h", sendMessage $ G.Modify $ G.moveToGroupUp True)
     , ("M-S-l", sendMessage $ G.Modify $ G.moveToGroupDown True)
@@ -2082,7 +2159,12 @@ myKeys toggleFadeSet =
         h <- getCurrentWorkspaceHandle 
         toggleAutoArrangeWorkspace h
         runLogHook)
-    , ("M-C-s", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.splitGroup)
+    -- toggle insert older
+    , ("M-C-s", toggleInsertOlder >> runLogHook)
+    -- force insert older, while remembering the old toggle
+    , ("M-M1-s", toggleInsertOlderForce >> runLogHook)
+    -- recover for the old toggle
+    , ("M-M1-S-s", toggleInsertOlderRecover >> runLogHook)
     , ("M-C-c", sendMessage $ G.Modify G.collapse)
 
     , ("M-S-,", sendMessage $ G.ToEnclosing $ SomeMessage zoomOut)
@@ -2139,11 +2221,6 @@ myKeys toggleFadeSet =
     -- }}}
     ----- Loghook-- {{{
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
-    , ("M-S-x", wallpaperChangeFadeFullHook changeWallpaperCmd)
-    , ("M-x", wallpaperToggleHook toggleFadeSet)
-    , ("M-C-x d", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -D")
-    , ("M-C-x f", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -F")
-    , ("M-C-x e", wallpaperChangeFadeFullHook $ changeWallpaperCmd++" -E")
     -- }}}
     ]
 ----- QuickWorkspace-- {{{
@@ -2165,13 +2242,7 @@ myKeys toggleFadeSet =
                 fmap (\c -> ("S-"++[c], toUpper c)) ['a'..'z']]
     ++
     [ ("M-;", playLastFindFunction Next)
-    , ("M-,", playLastFindFunction Prev)])
--- }}}
------ Repeat-- {{{
-    ++
-    [
-      ("M-.", getLastCommand >>= id)
-    ]
+    , ("M-,", playLastFindFunction Prev)]
 -- }}}
         where cycleInCurrWSOfPropMatchingPrefix dir p c casesens =  
                   let trans = if casesens then id else toLower in
@@ -2183,7 +2254,9 @@ myKeys toggleFadeSet =
 main = do
     toggleFadeSet <- newIORef S.empty
     dzenLogBar <- myStatusBars
-    xmonad $ ewmh defaultConfig { 
+    -- urgencyhook is not used currently due to conflict with the wallpaper system
+    xmonad $ ewmh $ U.withUrgencyHook U.NoUrgencyHook $ defaultConfig { 
+    {-xmonad $ ewmh $ defaultConfig { -}
         manageHook = myManageHook 
         , terminal = myTerminal
         , workspaces = [scratchpadWorkspaceTag, tmpWorkspaceTag]

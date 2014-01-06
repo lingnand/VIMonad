@@ -18,6 +18,7 @@ module XMonad.Layout.Decoration
       -- $usage
       decoration
     , Theme (..), defaultTheme, def
+    , SubTheme (..)
     , Decoration
     , DecorationMsg (..)
     , DecorationStyle (..)
@@ -45,6 +46,7 @@ import XMonad.Util.Invisible
 import XMonad.Util.XUtils
 import XMonad.Util.Font
 import XMonad.Util.Image
+import qualified XMonad.Util.ExtensibleState as XS
 
 -- $usage
 -- This module is intended for layout developers, who want to decorate
@@ -66,6 +68,14 @@ decoration s t ds = ModifiedLayout (Decoration (I Nothing) s t ds)
 -- | A 'Theme' is a record of colors, font etc., to customize a
 -- 'DecorationStyle'.
 --
+data SubTheme = SubTheme { winActiveColor :: String
+                         , winActiveBorderColor :: String
+                         , winActiveTextColor :: String
+                         , winInactiveColor :: String
+                         , winInactiveBorderColor :: String
+                         , winInactiveTextColor :: String
+                         } 
+
 -- For a collection of 'Theme's see "XMonad.Util.Themes"
 data Theme =
     Theme { activeColor        :: String                   -- ^ Color of the active window
@@ -84,7 +94,14 @@ data Theme =
                                                            --    Refer to for a use "XMonad.Layout.ImageButtonDecoration"
           , windowTitleIcons    :: [([[Bool]], Placement)] -- ^ Extra icons to appear in a window's title bar.
                                                            --    Inner @[Bool]@ is a row in a icon bitmap.
+          , subThemeForWindow   :: Window -> X (Maybe SubTheme)
           } deriving (Show, Read)
+
+instance Read (Window -> X (Maybe SubTheme)) where
+    readsPrec _ value = [(\w -> return Nothing, value)]
+
+instance Show (Window -> X (Maybe SubTheme)) where
+    show _ = ""
 
 instance Default Theme where
   def =
@@ -102,6 +119,7 @@ instance Default Theme where
           , decoHeight          = 20
           , windowTitleAddons   = []
           , windowTitleIcons    = []
+          , subThemeForWindow   = \w -> return Nothing
           }
 
 {-# DEPRECATED defaultTheme "Use def (from Data.Default, and re-exported by XMonad.Layout.Decoration) instead." #-}
@@ -132,8 +150,7 @@ type OrigWin = (Window,Rectangle)
 -- to modify the layout by adding decorations according to a
 -- 'DecorationStyle'.
 data Decoration ds s a =
-    Decoration (Invisible Maybe DecorationState) s Theme (ds a)
-    deriving (Show, Read)
+    Decoration (Invisible Maybe DecorationState) s Theme (ds a) deriving (Show, Read)
 
 -- | The 'DecorationStyle' class, defines methods used in the
 -- implementation of the 'Decoration' 'LayoutModifier' instance. A
@@ -390,11 +407,17 @@ updateDeco sh t fs ((w,_),(Just dw,Just (Rectangle _ _ wh ht))) = do
   nw  <- getName w
   ur  <- readUrgents
   dpy <- asks display
-  let focusColor win ic ac uc = (maybe ic (\focusw -> case () of
-                                                       _ | focusw == win -> ac
-                                                         | win `elem` ur -> uc
-                                                         | otherwise     -> ic) . W.peek)
-                                `fmap` gets windowset
+  focus <- gets (W.peek . windowset)
+  let focusColor win ic ac uc = do
+         mst <- (subThemeForWindow t) win
+         case (focus, win, mst) of 
+            (Just fw, w, Just st) | fw == w -> return (winActiveColor st, winActiveBorderColor st, winActiveTextColor st)
+                                  | win `elem` ur -> return uc
+                                  | otherwise -> return (winInactiveColor st, winInactiveBorderColor st, winInactiveTextColor st)
+            (Just fw, w, _)  | fw == w -> return ac
+                             | win `elem` ur -> return uc
+                             | otherwise -> return ic
+            _ -> return ic
   (bc,borderc,tc) <- focusColor w (inactiveColor t, inactiveBorderColor t, inactiveTextColor t)
                                   (activeColor   t, activeBorderColor   t, activeTextColor   t)
                                   (urgentColor   t, urgentBorderColor   t, urgentTextColor   t)

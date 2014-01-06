@@ -1,0 +1,13 @@
+short_units yes
+background no
+out_to_console yes
+out_to_x no
+# Update interval in seconds
+update_interval 1
+update_interval_on_battery 10
+
+TEXT
+# -------------------------------------------------------------------------- 
+# fmc player information
+# -------------------------------------------------------------------------- 
+${exec /home/lingnan/.xmonad/scripts/dzen_fmc.sh}

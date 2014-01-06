@@ -26,7 +26,10 @@ module XMonad.Prompt.Shell
     , getBrowser
     , getEditor
     , getShellCompl
+    , getShellComplWithDir
     , split
+    , escape
+    , env
     ) where
 
 import           Codec.Binary.UTF8.String (encodeString)
@@ -94,16 +97,21 @@ unsafePrompt c config = mkXPrompt Shell config (getShellCompl [c]) run
     where run a = unsafeSpawn $ c ++ " " ++ a
 
 getShellCompl :: [String] -> String -> IO [String]
-getShellCompl cmds s | s == "" || last s == ' ' = return []
-                     | otherwise                = do
-    f     <- fmap lines $ runProcessWithInput "bash" [] ("compgen -A file -- "
-                                                        ++ s ++ "\n")
-    files <- case f of
-               [x] -> do fs <- getFileStatus (encodeString x)
-                         if isDirectory fs then return [x ++ "/"]
-                                           else return [x]
-               _   -> return f
-    return . uniqSort $ files ++ commandCompletionFunction cmds s
+getShellCompl = getShellComplWithDir "" True
+
+getShellComplWithDir :: String -> Bool -> [String] -> String -> IO [String]
+getShellComplWithDir dir silent cmds s 
+    | silent && empty = return []
+    | otherwise = do
+        f     <- fmap lines $ runProcessWithInput "bash" [] ("cd "++dir++"; compgen -A file -- "
+                                                            ++ s ++ "\n")
+        files <- case f of
+                   [x] -> do fs <- getFileStatus (encodeString x)
+                             if isDirectory fs then return [x ++ "/"]
+                                               else return [x]
+                   _   -> return f
+        return . uniqSort $ files ++ if empty then [] else commandCompletionFunction cmds s
+            where empty = s == "" || last s == ' '
 
 commandCompletionFunction :: [String] -> String -> [String]
 commandCompletionFunction cmds str | '/' `elem` str = []

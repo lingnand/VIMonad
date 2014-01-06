@@ -1,9 +1,10 @@
-{-module XMonad.Prompt.DynamicPrompt-}
-    {-( -}
-    {-) where-}
+module XMonad.Prompt.DynamicPrompt
+    ( 
+    ) where
 
-{-import XMonad.Prompt-}
-{-import XMonad.Core-}
+import XMonad.Prompt
+import XMonad.Core
+import XMonad.Prompt.Shell
 
 {----- the point of this module is to make running commands and applications 'a breeze'. The commands are used such that those that show output are promptly shown as completions-}
 
@@ -26,7 +27,28 @@
 {-fmcHeaderCompletions = ["q","i","s","h"]-}
 {-wordInside word s = isInfixOf word $ map toLower s-}
 
-{-data FMCPrompt = FMCPrompt-}
+-- dir is the current directory (shorten it for better display)
+data DynamicPrompt = DPrompt dir
+
+instance XPrompt DynamicPrompt where
+    showXPrompt (DPrompt dir) = dir ++ " > "
+    commandToComplete _ c = c
+    completionToCommand _ = escape
+
+isSpecialChar :: Char -> Bool
+isSpecialChar =  flip elem " &\\@\"'#?$*()[]{};"
+
+escape :: String -> String
+escape []       = ""
+escape (x:xs)
+    | isSpecialChar x = '\\' : x : escape xs
+    | otherwise       = x : escape xs
+
+-- presumably you should first get the correct path and then pass it here
+dynamicPrompt dir c = do
+    cmds <- io getCommands
+    mkXPrompt (DPrompt $ shorten dir) (spawn . ("cd "++dir";"++))
+
 
 {-instance XPrompt FMCPrompt where-}
     {-showXPrompt FMCPrompt = "douban.fm > "-}

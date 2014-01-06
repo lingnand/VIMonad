@@ -116,6 +116,9 @@ getMinimizedWindows l = do
 
 getCurrentMinimizedWindows = gets (W.layout . W.workspace . W.current . windowset) >>= getMinimizedWindows
 
+-- filter the list such that those non-existent ones are avoided
+correctWins ls ws = filter (`elem` (W.allWindows ws)) ls
+
 instance LayoutModifier Minimize Window where
     modifierDescription _ = "Minimize"
 
@@ -143,22 +146,25 @@ instance LayoutModifier Minimize Window where
                 return $ Just $ Minimize (minimized \\ [w]) (M.delete w unfloated)
         | Just RestoreNextMinimizedWin <- fromMessage m = do
           ws <- gets windowset
-          if not (null minimized)
-            then case M.lookup (head minimized) unfloated of
+          let cminimized = correctWins minimized ws
+          -- should check if the window is valid (still exists)
+          if not (null cminimized)
+            then case M.lookup (head cminimized) unfloated of
               Nothing -> do
-                let w = head minimized
+                let w = head cminimized
                 setNotMinimized w
                 modify (\s -> s { windowset = W.focusWindow w ws})
-                return $ Just $ Minimize (tail minimized) unfloated
+                return $ Just $ Minimize (tail cminimized) unfloated
               Just r -> do
-                let w = head minimized
+                let w = head cminimized
                 setNotMinimized w
                 modify (\s -> s { windowset = (W.focusWindow w . W.float w r) ws})
-                return $ Just $ Minimize (tail minimized) (M.delete w unfloated)
+                return $ Just $ Minimize (tail cminimized) (M.delete w unfloated)
             else return Nothing
         | Just MinimizedSave <- fromMessage m = do
             -- just save the minimized list to the data
-            XS.put $ MinimizedWindows minimized
+            ws <- gets windowset
+            XS.put $ MinimizedWindows (correctWins minimized ws)
             return $ Just ol
         | Just BW.UpdateBoring <- fromMessage m = do
             ws <- gets (W.workspace . W.current . windowset)
