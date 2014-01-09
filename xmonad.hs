@@ -351,7 +351,7 @@ stdSearchPredicate cmd cpl = isInfixOf (map toLower cmd) (map toLower cpl)
 prefixSearchPredicate cmd cpl = isPrefixOf (map toLower cmd) (map toLower cpl)
 
 -- an implementation for searchPredicate that will make sure all words typed are contained in the result
-repeatedGrep cmd cpl = all (\w -> w `isInfixOf` lp) (words lc) 
+repeatedGrep cmd cpl = all (`isInfixOf` lp) (words lc) 
     where lc = map toLower cmd
           lp = map toLower cpl
 
@@ -1055,7 +1055,7 @@ workspacePrompt conf p ef f = do
     wts <- allWorkspaceTags
     wns <- fmap (fmap (\(a,b)->if null b then a else a++":"++b) . zip wts) allWorkspaceNames
     let complFun s = if null extWns 
-               then fmap lines $ runProcessWithInput "symtag" ["print", "false", "%t", "20", ".*"++s++".*"] ""
+               then fmap lines $ runProcessWithInput "symtag" ["print", "false", "%t", show tagLimit, ".*"++s++".*"] ""
                else return extWns
                where fil = filter (searchPredicate conf s)
                      extWns = fil wns 
@@ -1204,42 +1204,26 @@ launcherPrompt :: XPConfig -> [XPMode] -> X()
 launcherPrompt config modes = mkXPromptWithModes modes config
 
 ----- Dynamic prompt -- {{{
+outputWidth = 200
+outputHeight = 40
+myFasdBin = "fasd"
+symtaglibroot = "~/DB/"
 dphandler = myScriptsDir++"/dphandler"
 
 data DynamicPrompt = DPrompt String
 
-stripSuffix suf s = fmap reverse $ stripPrefix (reverse suf) (reverse s)
-isOutput = (>= outputWidth) . length
-
 instance XPrompt DynamicPrompt where
     showXPrompt (DPrompt dir) = dir ++ " > "
     commandToComplete _ = id
-    nextCompletion _ c l
-        | isOutput (head l) = c
-        | otherwise = case args of
-             [] -> escape $ head l
-             _ -> fromMaybe "" (stripSuffix lastArg c) ++ (escape $ l !! case findIndex (== unescape lastArg) l of
-                                                       Just i -> if i >= length l - 1 then 0 else i+1
-                                                       Nothing -> 0)
-             where lastArg = last $ args
-                   args = parseShellArgs c
-    highlightPredicate _ cl cmd
-        | isOutput cl = False
-        | otherwise = not (null args) && unescape (last args) == cl 
-             where args = parseShellArgs cmd
+    nextCompletion _ = dpromptNextCompletion
+    highlightPredicate _ = dpromptHighlightPredicate
 
-outputWidth = 200
-
-homeShorten dir = do
-    home <- io $ env "HOME" "/home/lingnan"
-    return $ maybe dir ("~"++) $ stripPrefix home dir
-
-parseShellArgs str = let tk b a = if null a || (head a == ' ' && not (null b) && head b /= '\\')
-                                      then (if null b then [] else [reverse b], a)
+-- helper functions
+parseShellArgs str = let tk b a = if null a || (isSpace (head a) && not (null b) && head b /= '\\')
+                                      then ([reverse b], a)
                                       else tk (head a:b) (tail a)
                          (arg, rest) = tk "" (dropWhile (==' ') str)
                      in if null rest then arg else arg ++ parseShellArgs rest
-
 unescape = let tk b cked a = case (b, a, cked) of
                                 (_,       [],      _) -> reverse b
                                 ('\\':bs, '\\':as, False) -> tk b True as 
@@ -1247,20 +1231,165 @@ unescape = let tk b cked a = case (b, a, cked) of
                                 (_,       ha:as,   _) -> tk (ha:b) False as 
            in tk "" False
 
+shortend home s = maybe s ("~"++) $ stripPrefix home s
+expandd home s = maybe s (home++) $ stripPrefix "~" s
+correctDir home d = io (canonicalizePath (if null d then home else expandd home d))
+stripSuffix suf s = fmap reverse $ stripPrefix (reverse suf) (reverse s)
+isOutput = (>= outputWidth) . length
+limitSpace l = take l . fillSpace l
+
+-- search widgets
+fasdLimit = 20
+findLimit = 20
+tagLimit = 20
+grepLimit = 20
+whichLimit = 20
+evalLimit = 20
+isGrepOutput s = isOutput s && ':' `elem` s
+stripGrepOutput = head . splitOn ":"
+shortcutArgs args = case reverse args of
+                           (ha:a):pas | ha `elem` "sm" && length a <= 1 -> (reverse pas, [ha:a])
+                           _ -> (args, [])
+isShortcutOutput s = length s > 2 && (s!!1) == ':'
+stripShortcutOutput = last . splitOn ":"
+isSearchFilter s = s `elem` ["f", "a", "d", "z", "l", "t", "g", "which"] || ((length s) `elem` [1, 2] && (head s) `elem` "sm")
+-- dirty hack // check if the completion starts with path
+isValidPath s = (head s) `elem` "~/"
+
+data PromptWidget = PromptWidget { promptPrefix :: String
+                                 , promptCommandToComplete :: String -> String
+                                 , promptNextCompletion :: String -> [String] -> String
+                                 , promptComplFunction :: ComplFunction
+                                 , promptAction :: String -> X ()
+                                 , promptHighlightPredicate :: String -> String -> Bool
+                                 }
+-- (prefix, commandToComplete, nextCompletion, complFunc, modeAction)
+dwgt p pre cf act = PromptWidget { promptPrefix = pre
+                                 , promptCommandToComplete = commandToComplete p
+                                 , promptNextCompletion = nextCompletion p
+                                 , promptComplFunction = cf
+                                 , promptAction = act
+                                 , promptHighlightPredicate = highlightPredicate p
+                                 }
+isWidgetFilter = flip elem (fmap promptPrefix dynamicPromptWidgets)
+widgetCmd w c = let p = promptPrefix w++" " in joinStr p $ tail $ splitOn p c
+findWidget pre = find ((==pre) . promptPrefix) dynamicPromptWidgets
+findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) $ fmap (\w -> (stripPrefix (promptPrefix w ++ " ") c, w)) dynamicPromptWidgets
+
+dynamicPromptWidgets = [
+        -- this follow the (prefix, prompt) format
+        dwgt VBPrompt "vb" vbComplFunc vbAction
+      , dwgt defaultSDMode "sdcv" (completionFunction defaultSDMode) (flip (modeAction defaultSDMode) "")
+      , dwgt TaskPrompt "tk" taskComplFunc taskAction
+      , dwgt FMCPrompt "fmc" fmcComplFunc fmcAction
+      , dwgt CalcMode "calc" (completionFunction CalcMode) (flip (modeAction CalcMode) "")
+    ]
+
+evalStr s = let evalcomps = splitOn "`" s
+                evallen = length evalcomps 
+                t = tail evalcomps
+            in if odd evallen && evallen >= 3 then (head evalcomps, head t, joinStr "`" $ tail t)
+                                              else (s,"","")
+
+dpromptNextCompletion c l = case break (\s -> isSearchFilter s || isWidgetFilter s) args of
+                   (bef, "z":_:_) -> joinStr " " $ bef ++ ["c", escape (head l)]
+                   (bef, "g":_:_) -> joinStr " " $ bef ++ [stripGrepOutput $ escape (head l)]
+                   (bef, ['s':pre]) -> exactMatch $ fmap stripShortcutOutput l
+                   (bef, ('m':pre):_) -> c
+                   (bef, "which":_) | all isValidPath l -> joinStr " " $ bef ++ [escape (head l)]
+                                    | otherwise -> exactMatch l
+                   (bef, w:_:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                                                           in joinStr " " $ bef ++ [w, promptNextCompletion wp (widgetCmd wp c) l]
+                   (bef, _:_:_) -> joinStr " " $ bef ++ [escape (head l)]
+                   _ | all isGrepOutput l -> exactMatch $ fmap stripGrepOutput l
+                     | all isShortcutOutput l -> exactMatch $ fmap stripShortcutOutput l
+                     | not (null evalstr) ->  evall ++ escape (head l) ++ evalr
+                     | isOutput (head l) -> c
+                     | otherwise -> exactMatch l
+             where lastArg = last $ args
+                   sas = shortcutArgs args
+                   args = parseShellArgs c
+                   (evall, evalstr, evalr) = evalStr c
+                   exactMatch ls = fromMaybe "" (stripSuffix lastArg c) ++ (escape $ exactNext ls)   
+                   exactNext ls = let rev = reverse ls in rev !! case findIndex (== unescape lastArg) rev of
+                               Just i -> if i <= 0 then length ls - 1 else (i-1)
+                               Nothing -> length ls - 1 
+
+dpromptHighlightPredicate cl cmd = case break (\s -> isSearchFilter s || isWidgetFilter s) args of
+                (bef, w:_:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                                                            in promptHighlightPredicate wp cl (widgetCmd wp cmd)
+                _ | isShortcutOutput cl -> (stripShortcutOutput cl) == unescapedLastArg
+                  | isGrepOutput cl -> (stripGrepOutput cl) == unescapedLastArg
+                  | isOutput cl -> False
+                  | otherwise -> not (null args) && unescapedLastArg == cl 
+             where args = parseShellArgs cmd
+                   unescapedLastArg = unescape $ last args 
+
+dpromptComplFunc c home dir fasdf fasdd cmds s = do
+        let args = parseShellArgs s
+            lastArg = if null args then "" else last args
+            shellcps act cs = getShellComplWithDir dir False act cs
+            unescapedArgs = map unescape args
+            sht = shortend home
+            epd = expandd home
+            sp = searchPredicate c
+            fasd aft set = return $ take fasdLimit $ filter (sp $ joinStr " " aft) set
+            sct pre = fmap lines $ runProcessWithInput (myScriptsDir++"/xshortcut") [ "print", pre ] ""
+            (_,evalstr,_) = evalStr s
+        case unescapedArgs of
+            "man":pa:pai:pas -> fmap (map (fillSpace outputWidth) . lines) $ runProcessWithInput (myScriptsDir++"/xman") (show outputWidth:show outputHeight:pa:pas) ""
+            _ -> fmap (fmap sht) $ case break (\s -> isSearchFilter s || isWidgetFilter s) unescapedArgs of
+                    (_, "f":af:afs) -> fasd (af:afs) fasdf
+                    (_, "d":af:afs) -> fasd (af:afs) fasdd
+                    (_, "a":af:afs) -> fasd (af:afs) $ fasdf++fasdd
+                    (_, "z":af:afs) -> fasd (af:afs) $ fasdd
+                    (_, ['s':pre]) -> sct pre
+                    (_, ['m':pre]) -> sct pre
+                    (_, "l":aft) -> fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:aft) ""
+                    (_, "t":aft) -> fmap (fmap (symtaglibroot++) . lines) $ runProcessWithInput "symtag" [ "print", "false", "%t", show tagLimit, joinStr ".*" aft ] ""
+                    (_, "g":aft) -> fmap (fmap (limitSpace outputWidth) . filter (':' `elem`) . lines) $ runProcessWithInput (myScriptsDir++"/xgrep") ([ show grepLimit, "-R" ] ++ aft ++ [ "." ]) ""
+                    (_, "which":af:afs) -> 
+                        -- test if af is one of the commands
+                        if af `elem` cmds then fmap lines $ runProcessWithInput "which" (af:afs) ""
+                                          else return $ take whichLimit $ filter (sp $ joinStr " " (af:afs)) cmds
+                    (bef, w:_:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                                                            in promptComplFunction wp (widgetCmd wp s)
+                -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
+                    _ | not (null evalstr) -> fmap (take evalLimit . lines) $ runProcessWithInput "bash" ["-c", evalstr] ""
+                      | otherwise -> do
+                        -- try to scope that last argument
+                        ls <- case reverse unescapedArgs of
+                                   "":fa:_ | length (takeWhile isSpace $ reverse s) == 1 -> fmap (fmap (fillSpace outputWidth) . lines) $ runProcessWithInput "/home/lingnan/bin/scope" [epd fa, show outputWidth, show outputHeight, show outputHeight] ""
+                                   _ -> return []
+                        if null ls then let (sas, scs) = if (head unescapedArgs) `elem` ["c", "cd"] then (["directory"], []) else (["file"], cmds) in shellcps sas scs $ epd lastArg
+                                   else return ls
+
+dpromptAction c home dir s = 
+        -- perform some special actions on some commands
+        let args = parseShellArgs s
+        in case (findWidgetForAction s, args) of
+                (Just (rest, w), _) -> (promptAction w) rest
+                (_, ('m':pre):pas) | length pre == 1 -> spawn $ myScriptsDir++"/xshortcut mark "++pre++" "++(joinStr " " pas)
+                (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do
+                                 d <- if null pas 
+                                         then return home 
+                                         else case head pas of
+                                                 "-" -> getCurrentWorkspaceOldDirectory
+                                                 p -> return $ unescape p
+                                 (correctDir home d) `catchX` (return home) >>= saveCurrentWorkspaceDirectory 
+                                 dynamicPrompt c
+                            | otherwise -> spawn $ shellFullCmd (dphandler++" "++if null s then "." else s) dir
+
 dynamicPrompt c = do
     cmds <- io getCommands
     dir <- getCurrentWorkspaceDirectory
-    shortened <- homeShorten dir
-    io $ setCurrentDirectory dir
-    let compfun s = do
-            let args = parseShellArgs s
-                lastArg = if null args then "" else last args
-            -- first unescape the string into a list
-            case (map unescape args, last s) of
-               ("man":pa:pas, ' ') -> fmap (map (fillSpace outputWidth) . lines) $ runProcessWithInput (myScriptsDir++"/man") (pa:pas) ""
-               _ -> fmap (filter ((searchPredicate c) (unescape lastArg))) $ getShellComplWithDir dir False cmds lastArg
-    mkXPrompt (DPrompt shortened) c compfun $ \s -> 
-        spawn $ shellFullCmd (dphandler++" "++if null s then "." else s) dir
+    home <- io $ env "HOME" "/home/lingnan"
+    -- to better fasd performace, we can first extract out all the values for the fasd components
+    fasdf <- fmap lines $ runProcessWithInput myFasdBin ["-R","-f","-l","-B","viminfo"] ""
+    fasdd <- fmap lines $ runProcessWithInput myFasdBin ["-R","-d","-l"] ""
+    cdir <- (correctDir home dir) `catchX` (return home)
+    io $ setCurrentDirectory cdir
+    mkXPrompt (DPrompt $ shortend home cdir) c (dpromptComplFunc c home dir fasdf fasdd cmds) (dpromptAction c home dir)
 -- }}}
 
 ----- Calculator prompt -- {{{
@@ -1275,7 +1404,7 @@ instance XPrompt CalculatorMode where
     commandToComplete CalcMode = id --send the whole string to `calc`
     completionFunction CalcMode = \s -> if (length s == 0) then return [] else do
         fmap (lines . trim) $ runProcessWithInput "calc" ["--", s] ""
-    modeAction CalcMode _ tx = spawn $ "echo -n '"++tx++"' | xclip"
+    modeAction CalcMode c tx = spawn $ "calc -- '"++c++"' | xclip"
 
 calcMode :: XPMode
 calcMode = XPT CalcMode
@@ -1300,12 +1429,15 @@ instance XPrompt StarDictMode where
     completionFunction (SDMode bin _ d) = \s -> if (length s == 0) then return [] else do
         fmap lines $ runProcessWithInput bin [d, s, sdLength] ""
     modeAction _ query _ = safeSpawn "espeak" [query]
+    nextCompletion _ c _ =  c
+    highlightPredicate _ _ _ = False
 mkSDMode p d = XPT $ SDMode sdcvBin p d
 mkCHSDMode p d = XPT $ SDMode chsdcvBin p d
+defaultSDMode = SDMode sdcvBin "Collins Cobuild 5 > " "Collins Cobuild 5"
 
 defaultModesForInput (c:cs)
     | isNumber c || isSymbol c = [calcMode]
-    | c `elem` ['a'..'z'] = [mkSDMode  "Collins Cobuild 5 > " "Collins Cobuild 5", mkSDMode  "English Thesaurus > " "English Thesaurus", mkSDMode  "Merrian Webster > " "Merrian Webster 10th dictionary"]
+    | c `elem` ['a'..'z'] = [XPT $ defaultSDMode, mkSDMode  "English Thesaurus > " "English Thesaurus", mkSDMode  "Merrian Webster > " "Merrian Webster 10th dictionary"]
     -- we assume that such case means that we need to use Chinese dictionaries
     | otherwise = [mkCHSDMode "现代汉语词典 > " "Modern Chinese Dictionary", mkCHSDMode  "汉语大词典 > " "Chinese Big Dictionary"]
 -- }}}
@@ -1314,24 +1446,25 @@ defaultModesForInput (c:cs)
 
 data VBPrompt = VBPrompt
 
-instance XPrompt VBPrompt where
-    showXPrompt t = "vimb > "
-    commandToComplete t = id
-    completionToCommand t = last . words
-    nextCompletion t cmd ls = completionToCommand t $ ls !! ni
+vbNextCompletion cmd ls = last $ words $ ls !! ni
         where ni = case findIndex (vbIsEqualToCompletion cmd) ls of
                       Just i -> if i >= length ls - 1 then 0 else i+1
-                      Nothing -> 0
-    highlightPredicate VBPrompt cl cmd = vbIsEqualToCompletion cmd cl
-
-vbIsEqualToCompletion cmd cl = cmd == (last $ words cl)
-
+                      Nothing -> 0 
+vbHighlightPredicate = flip vbIsEqualToCompletion
+vbAction s = spawn $ "vb "++(escapeQuery s)
 ----- if it's empty then return the top 10 results from history
 vbComplFunc s
     | null $ trim s = do fmap lines $ runProcessWithInput "vbhistory" [(show vbhistorySize)] "" 
     | otherwise = do fmap lines $ runProcessWithInput "vbopenurls" (["-n",(show vbMatchSize)]++(words s)) "" 
 
-vbAction s = spawn $ "vb "++(escapeQuery s)
+
+instance XPrompt VBPrompt where
+    showXPrompt _ = "vimb > "
+    commandToComplete _ = id
+    nextCompletion _ = vbNextCompletion
+    highlightPredicate _ = vbHighlightPredicate
+
+vbIsEqualToCompletion cmd cl = cmd == (last $ words cl)
 
 mkVBPrompt c = mkXPrompt VBPrompt c vbComplFunc vbAction
 vbPrompt = mkVBPrompt myXPConfig {
@@ -1509,8 +1642,8 @@ cycleMatchingOrDo qry dir f d = do
                             | otherwise -> case break (==f) float of
                                 (fl, _:fr) -> (fr, fl, l++gf++r, ml)
                                 -- the focus is neither on the focal of the stack nor on float (something is wrong)
-                                _ -> ([], [], [], [])
-                        _ -> ([], [], [], [])
+                                _ -> ([], [], float, ml)
+                        _ -> ([], [], float, ml)
         winl = if dir == Next then awinr++awinl++bwins++cwins++wwins else reverse $ wwins++cwins++bwins++awinr++awinl
     matches <- filterM (runQuery qry) winl
     case matches of
@@ -1637,6 +1770,46 @@ taskGroups = [
                                      , winActiveBorderColor = "#1d371d"
                                      }
           }
+      -- vim intances
+    , def { taskGroupName = "vim"
+          , filterKey = "v"
+          , filterPredicate = isTerm <&&> (appName =? "vim" <||> fmap (\s -> (" - VIM" `isInfixOf` s) && (not $ isInfixOf "vimpager" s)) title)
+          , construct = runShell "xvim"
+          -- brown
+          , colorScheme = mySubTheme { winInactiveColor = "#372517"
+                                     , winActiveColor = "#7f5233"
+                                     , winActiveBorderColor = "#372517"
+                                     }
+          }
+      -- pidgin buddylist
+    , def { taskGroupName = "pidgin-buddy"
+          , filterPredicate = isPidginBuddyList
+          , launchHook = rightPanelHook
+          , construct = mkNamedScratchpad scratchpads "pidgin"
+          , windowStyle = windowStyleFromList [rightPanelHook, leftPanelHook, doSink]
+          }
+      -- pidgin conversation windows
+    , def { taskGroupName = "pidgin"
+          , filterKey = "d"
+          , filterPredicate = className =? "Pidgin"
+          , construct = mkNamedScratchpad scratchpads "pidgin"
+          -- purple
+          , colorScheme = mySubTheme { winInactiveColor = "#231536"
+                                     , winActiveColor = "#6a4d99"
+                                     , winActiveBorderColor = "#231536"
+                                     }
+          }
+      -- ranger instances
+    , def { taskGroupName = "ranger"
+          , filterKey = "r"
+          , filterPredicate = isTerm <&&> (title =? "ranger" <||> appName =? "ranger")
+          , construct = runTerm "ranger" "ranger" "loader ranger"
+          -- yellow
+          , colorScheme = mySubTheme { winInactiveColor = "#353119"
+                                     , winActiveColor = "#7f7233"
+                                     , winActiveBorderColor = "#353119"
+                                     }
+          }
      -- zathura instances
     , def { taskGroupName = "zathura"
           , filterKey = "z"
@@ -1647,6 +1820,12 @@ taskGroups = [
                                      , winActiveColor = "#7f334a"
                                      , winActiveBorderColor = "#371921"
                                      }
+          }
+      -- recyclable term instances (m-s-<Return> triggers the same event)
+    , def { taskGroupName = "term"
+          , filterKey = "t"
+          , filterPredicate = isRecyclableTerm <||> appName =? "xterm"
+          , construct = runTerm "" "xterm" "zsh -i"
           }
       -- notice: group selection that applies to these 'hidden' groups (namely triggered by auto-group when one of the windows is in focus), will still apply to all matched windows
       -- mutt scratchpad singleton
@@ -1690,24 +1869,6 @@ taskGroups = [
           {-[>, launchHook = liftX (findWorkspaceWithName "comm") >>= doViewShift<]-}
           {-, construct = runUniqueTerm "" uniqueFinch-}
           {-}-}
-      -- pidgin buddylist
-    , def { taskGroupName = "pidgin-buddy"
-          , filterPredicate = isPidginBuddyList
-          , launchHook = rightPanelHook
-          , construct = mkNamedScratchpad scratchpads "pidgin"
-          , windowStyle = windowStyleFromList [rightPanelHook, leftPanelHook, doSink]
-          }
-      -- pidgin conversation windows
-    , def { taskGroupName = "pidgin"
-          , filterKey = "d"
-          , filterPredicate = className =? "Pidgin"
-          , construct = mkNamedScratchpad scratchpads "pidgin"
-          -- purple
-          , colorScheme = mySubTheme { winInactiveColor = "#231536"
-                                     , winActiveColor = "#6a4d99"
-                                     , winActiveBorderColor = "#231536"
-                                     }
-          }
       -- intellij singleton
     , def { taskGroupName = "idea"
           , filterKey = "i"
@@ -1733,34 +1894,6 @@ taskGroups = [
           , filterKey = "l"
           , filterPredicate = fmap (isInfixOf "libreoffice") className
           , construct = runShell "libreoffice"
-          }
-      -- ranger instances
-    , def { taskGroupName = "ranger"
-          , filterKey = "r"
-          , filterPredicate = isTerm <&&> (title =? "ranger" <||> appName =? "ranger")
-          , construct = runTerm "ranger" "ranger" "loader ranger"
-          -- yellow
-          , colorScheme = mySubTheme { winInactiveColor = "#353119"
-                                     , winActiveColor = "#7f7233"
-                                     , winActiveBorderColor = "#353119"
-                                     }
-          }
-      -- vim intances
-    , def { taskGroupName = "vim"
-          , filterKey = "v"
-          , filterPredicate = isTerm <&&> (appName =? "vim" <||> fmap (\s -> (" - VIM" `isInfixOf` s) && (not $ isInfixOf "vimpager" s)) title)
-          , construct = runShell "xvim"
-          -- brown
-          , colorScheme = mySubTheme { winInactiveColor = "#372517"
-                                     , winActiveColor = "#7f5233"
-                                     , winActiveBorderColor = "#372517"
-                                     }
-          }
-      -- recyclable term instances (m-s-<Return> triggers the same event)
-    , def { taskGroupName = "term"
-          , filterKey = "t"
-          , filterPredicate = isRecyclableTerm <||> appName =? "xterm"
-          , construct = runTerm "" "xterm" "zsh -i"
           }
       -- all remaining xterms can be matched in this group
     , def { taskGroupName = "term(...)"
@@ -2023,7 +2156,8 @@ myKeys toggleFadeSet =
     , ("<F12>", spawn $ "amixer set Master 2+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
     -- }}}
     ----- Prompts-- {{{
-    , ("M-r", dynamicPrompt myXPConfig {autoComplete = Nothing, searchPredicate = prefixSearchPredicate})
+    -- bind change mode to some key that would never be used
+    , ("M-r", dynamicPrompt myXPConfig { changeModeKey = xK_VoidSymbol, autoComplete = Nothing, searchPredicate = repeatedGrep })
     , ("M-b", vbPrompt)
     -- xmonad commands
     , ("M-C-,", xmonadPrompt myXPConfig {autoComplete = Nothing})
@@ -2153,7 +2287,7 @@ myKeys toggleFadeSet =
     , ("M-q", withFocused focusNextKillWindow)
     , ("M-S-q", G.getCurrentGStack >>= maybe (return ()) (mapM_ (focusNextKillWindow) . G.flattened . G.baseCurrent))
     , ("M-C-q", G.getCurrentGStack >>= maybe (return ()) (mapM_ (focusNextKillWindow) . maybe [] G.flattened . G.current))
-    , ("M-s", sortGroupStacks taskGroups)
+    , ("M-s", sortGroupStacks taskGroups >> runLogHook)
     -- a permanent sticky layout that will automatically move any new window into the corresponding task group
     , ("M-S-s", do
         h <- getCurrentWorkspaceHandle 

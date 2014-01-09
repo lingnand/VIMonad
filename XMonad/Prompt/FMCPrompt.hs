@@ -1,5 +1,8 @@
 module XMonad.Prompt.FMCPrompt
     ( mkFMCPrompt
+    , FMCPrompt(..)
+    , fmcAction
+    , fmcComplFunc
     ) where
 
 import XMonad.Prompt

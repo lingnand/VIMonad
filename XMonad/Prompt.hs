@@ -148,6 +148,7 @@ data XPConfig =
         , promptKeymap      :: M.Map (KeyMask,KeySym) (XP ())
                                          -- ^ Mapping from key combinations to actions
         , completionKey     :: KeySym     -- ^ Key that should trigger completion
+        , reverseCompletionKey :: KeySym -- ^ Key that when pressed with the completion key reverse the completion
         , changeModeKey     :: KeySym     -- ^ Key to change mode (when the prompt has multiple modes)
         , defaultText       :: String     -- ^ The text by default in the prompt line
         , autoComplete      :: Maybe Int  -- ^ Just x: if only one completion remains, auto-select it,
@@ -255,6 +256,7 @@ instance Default XPConfig where
         , promptBorderWidth = 1
         , promptKeymap      = defaultXPKeymap
         , completionKey     = xK_Tab
+        , reverseCompletionKey = 65056
         , changeModeKey     = xK_grave
         , position          = Bottom
         , height            = 18
@@ -499,9 +501,10 @@ handle :: KeyStroke -> Event -> XP ()
 handle ks@(sym,_) e@(KeyEvent {ev_event_type = t, ev_state = m}) = do
   complKey <- gets $ completionKey . config
   chgModeKey <- gets $ changeModeKey . config
+  reverseComplKey <- gets $ reverseCompletionKey . config
   c <- getCompletions
   when (length c > 1) $ modify (\s -> s { showComplWin = True })
-  if complKey == sym
+  if complKey == sym || reverseComplKey == sym
      then completionHandle c ks e
      else if (sym == chgModeKey) then
            do
@@ -517,9 +520,11 @@ handle _  _ = return ()
 completionHandle ::  [String] -> KeyStroke -> Event -> XP ()
 completionHandle c ks@(sym,_) (KeyEvent { ev_event_type = t, ev_state = m }) = do
   complKey <- gets $ completionKey . config
+  -- get the mask we are talking about
+  reverseComplKey <- gets $ reverseCompletionKey . config
   alwaysHlight <- gets $ alwaysHighlight . config
-  case () of
-    () | t == keyPress && sym == complKey ->
+  case t of
+    keyPress | sym `elem` [complKey, reverseComplKey] ->
           do
             st <- get
             let updateState l = case alwaysHlight of
@@ -531,12 +536,15 @@ completionHandle c ks@(sym,_) (KeyEvent { ev_event_type = t, ev_state = m }) = d
                               highlightedCompl' = highlightedItem st { complIndex = complIndex'} c
                           in modify $ \s -> setHighlightedCompl highlightedCompl' $ s { complIndex = complIndex' }
                 updateWins l = redrawWindows l >> eventLoop (completionHandle l)
+                updateStateWithDir l = updateState $ if sym == reverseComplKey then reverse l else l
             case c of
               []  -> updateWindows   >> eventLoop handle
-              [x] -> updateState [x] >> getCompletions >>= updateWins
-              l   -> updateState l   >> updateWins l
-      | t == keyRelease && sym == complKey -> eventLoop (completionHandle c)
-      | otherwise -> keyPressHandle m ks -- some other key, handle it normally
+              [x] -> updateStateWithDir [x] >> getCompletions >>= updateWins
+              l   -> updateStateWithDir l   >> updateWins l
+              -- dirty hack below (the reason for this: the shift key is first sent and then shift+tab becomes backtab; this sounds stupid but is still how it works. so we have to eliminate that case as well)
+             | sym == xK_Shift_L -> eventLoop (completionHandle c)
+    keyRelease | sym `elem` [complKey, reverseComplKey] -> eventLoop (completionHandle c)
+    _ -> keyPressHandle m ks -- some other key, handle it normally
 -- some other event: go back to main loop
 completionHandle _ k e = handle k e
 

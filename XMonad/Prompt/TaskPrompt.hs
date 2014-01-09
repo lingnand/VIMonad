@@ -1,5 +1,8 @@
 module XMonad.Prompt.TaskPrompt 
     ( mkTaskPrompt
+    , TaskWarriorPrompt(..)
+    , taskAction
+    , taskComplFunc
     ) where
 
 import XMonad.Prompt

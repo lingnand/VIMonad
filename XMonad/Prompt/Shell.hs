@@ -97,13 +97,13 @@ unsafePrompt c config = mkXPrompt Shell config (getShellCompl [c]) run
     where run a = unsafeSpawn $ c ++ " " ++ a
 
 getShellCompl :: [String] -> String -> IO [String]
-getShellCompl = getShellComplWithDir "" True
+getShellCompl = getShellComplWithDir "" True ["file"]
 
-getShellComplWithDir :: String -> Bool -> [String] -> String -> IO [String]
-getShellComplWithDir dir silent cmds s 
+getShellComplWithDir :: String -> Bool -> [String] -> [String] -> String -> IO [String]
+getShellComplWithDir dir silent actions cmds s 
     | silent && empty = return []
     | otherwise = do
-        f     <- fmap lines $ runProcessWithInput "bash" [] ("cd "++dir++"; compgen -A file -- "
+        f     <- fmap lines $ runProcessWithInput "bash" [] ("cd "++dir++"; compgen"++concatMap (" -A "++) actions++" -- "
                                                             ++ s ++ "\n")
         files <- case f of
                    [x] -> do fs <- getFileStatus (encodeString x)
