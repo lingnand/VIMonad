@@ -93,6 +93,7 @@ import qualified XMonad.Layout.Groups as G
 import qualified XMonad.StackSet as W
 import qualified XMonad.Util.ExtensibleState as XS
 import System.Posix.User
+import Text.Regex.Posix
 import Control.Applicative
 import XMonad.Hooks.EwmhDesktops hiding (fullscreenEventHook)
 -- }}}
@@ -1304,6 +1305,7 @@ dpromptNextCompletion c l = case break (\s -> isSearchFilter s || isWidgetFilter
                    _ | all isGrepOutput l -> exactMatch $ fmap stripGrepOutput l
                      | all isShortcutOutput l -> exactMatch $ fmap stripShortcutOutput l
                      | not (null evalstr) ->  evall ++ escape (head l) ++ evalr
+                     | all isOutput l && any ("commit" `isPrefixOf`) l && any ("Author" `isPrefixOf`) l && any ("Date" `isPrefixOf`) l -> exactMatch $ fmap (fromJust . stripPrefix "commit " . trim) $ filter ("commit " `isPrefixOf`) l
                      | isOutput (head l) -> c
                      | otherwise -> exactMatch l
              where lastArg = last $ args
@@ -1318,27 +1320,39 @@ dpromptNextCompletion c l = case break (\s -> isSearchFilter s || isWidgetFilter
 dpromptHighlightPredicate cl cmd = case break (\s -> isSearchFilter s || isWidgetFilter s) args of
                 (bef, w:_:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                             in promptHighlightPredicate wp cl (widgetCmd wp cmd)
-                _ | isShortcutOutput cl -> (stripShortcutOutput cl) == unescapedLastArg
-                  | isGrepOutput cl -> (stripGrepOutput cl) == unescapedLastArg
+                _ | isShortcutOutput cl -> stripShortcutOutput cl == unescapedLastArg
+                  | isGrepOutput cl -> stripGrepOutput cl == unescapedLastArg
+                  | trimcl =~ "commit [0-9a-z]{40}" -> last (words trimcl) == unescapedLastArg
                   | isOutput cl -> False
                   | otherwise -> not (null args) && unescapedLastArg == cl 
              where args = parseShellArgs cmd
                    unescapedLastArg = unescape $ last args 
+                   trimcl = trim cl
+
+whenNull ma mb = do
+    l <- ma
+    if null l then mb else return l
 
 dpromptComplFunc c home dir fasdf fasdd cmds s = do
         let args = parseShellArgs s
             lastArg = if null args then "" else last args
-            shellcps act cs = getShellComplWithDir dir False act cs
             unescapedArgs = map unescape args
             sht = shortend home
             epd = expandd home
             sp = searchPredicate c
             fasd aft set = return $ take fasdLimit $ filter (sp $ joinStr " " aft) set
             sct pre = fmap lines $ runProcessWithInput (myScriptsDir++"/xshortcut") [ "print", pre ] ""
+            ntailsp = length $ takeWhile isSpace (reverse s)
+            output pro ags = fmap (map (fillSpace outputWidth) . lines) $ runProcessWithInput pro ags ""
             (_,evalstr,_) = evalStr s
-        case unescapedArgs of
-            "man":pa:pai:pas -> fmap (map (fillSpace outputWidth) . lines) $ runProcessWithInput (myScriptsDir++"/xman") (show outputWidth:show outputHeight:pa:pas) ""
-            _ -> fmap (fmap sht) $ case break (\s -> isSearchFilter s || isWidgetFilter s) unescapedArgs of
+            trycmp = foldl whenNull (return [])
+            scopecmp = case reverse unescapedArgs of
+                                   "":fa:_ | ntailsp == 1 -> fmap (fmap (fillSpace outputWidth) . lines) $ runProcessWithInput "/home/lingnan/bin/scope" [epd fa, show outputWidth, show outputHeight, show outputHeight] ""
+                                   _ -> return [] 
+            shellcmp = let scs = if length args > 1 then [] else cmds
+                           sas = if (head unescapedArgs) `elem` ["c", "cd"] then ["directory"] else ["file"]
+                       in getShellComplWithDir dir False sas scs $ epd lastArg
+        fmap (fmap sht) $ case break (\s -> isSearchFilter s || isWidgetFilter s) unescapedArgs of
                     (_, "f":af:afs) -> fasd (af:afs) fasdf
                     (_, "d":af:afs) -> fasd (af:afs) fasdd
                     (_, "a":af:afs) -> fasd (af:afs) $ fasdf++fasdd
@@ -1356,13 +1370,14 @@ dpromptComplFunc c home dir fasdf fasdd cmds s = do
                                                             in promptComplFunction wp (widgetCmd wp s)
                 -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
                     _ | not (null evalstr) -> fmap (take evalLimit . lines) $ runProcessWithInput "bash" ["-c", evalstr] ""
-                      | otherwise -> do
-                        -- try to scope that last argument
-                        ls <- case reverse unescapedArgs of
-                                   "":fa:_ | length (takeWhile isSpace $ reverse s) == 1 -> fmap (fmap (fillSpace outputWidth) . lines) $ runProcessWithInput "/home/lingnan/bin/scope" [epd fa, show outputWidth, show outputHeight, show outputHeight] ""
-                                   _ -> return []
-                        if null ls then let (sas, scs) = if (head unescapedArgs) `elem` ["c", "cd"] then (["directory"], []) else (["file"], cmds) in shellcps sas scs $ epd lastArg
-                                   else return ls
+                      | otherwise -> case unescapedArgs of
+                            "man":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xman") $ show outputWidth:show outputHeight:pa:pai:pas
+                            "git":"":[] | ntailsp == 1 -> output "git" ["status"]
+                            -- only gives the prime command completion on three spaces
+                            "git":pa:[] -> return $ filter (sp pa) ["add", "am", "archive", "bisect", "branch", "bundle", "checkout", "cherry-pick", "citool", "clean", "clone", "commit", "describe", "diff", "fetch", "format-patch", "gc", "grep", "gui", "init", "log", "merge", "mv", "notes", "pull", "rebase", "reset", "rm", "shortlog", "show", "stash", "status", "submodule", "tag"]
+                            -- in all other instances we should give the log information
+                            "git":pa:_ -> trycmp [output "git" $ ["log", "--grep", last unescapedArgs], scopecmp, shellcmp]
+                            _ -> trycmp [scopecmp, shellcmp]
 
 dpromptAction c home dir s = 
         -- perform some special actions on some commands
