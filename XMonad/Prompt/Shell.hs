@@ -26,7 +26,7 @@ module XMonad.Prompt.Shell
     , getBrowser
     , getEditor
     , getShellCompl
-    , getShellComplWithDir
+    , getShellCompl'
     , split
     , escape
     , env
@@ -97,13 +97,13 @@ unsafePrompt c config = mkXPrompt Shell config (getShellCompl [c]) run
     where run a = unsafeSpawn $ c ++ " " ++ a
 
 getShellCompl :: [String] -> String -> IO [String]
-getShellCompl = getShellComplWithDir "" True ["file"]
+getShellCompl = getShellCompl' True ["file"]
 
-getShellComplWithDir :: String -> Bool -> [String] -> [String] -> String -> IO [String]
-getShellComplWithDir dir silent actions cmds s 
+getShellCompl' :: Bool -> [String] -> [String] -> String -> IO [String]
+getShellCompl' silent actions cmds s 
     | silent && empty = return []
     | otherwise = do
-        f     <- fmap lines $ runProcessWithInput "bash" [] ("cd "++dir++"; compgen"++concatMap (" -A "++) actions++" -- "
+        f     <- fmap lines $ runProcessWithInput "bash" [] ("compgen"++concatMap (" -A "++) actions++" -- "
                                                             ++ s ++ "\n")
         files <- case f of
                    [x] -> do fs <- getFileStatus (encodeString x)
