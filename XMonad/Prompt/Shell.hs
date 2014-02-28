@@ -103,10 +103,11 @@ getShellCompl' :: Bool -> [String] -> [String] -> String -> IO [String]
 getShellCompl' silent actions cmds s 
     | silent && empty = return []
     | otherwise = do
-        f     <- fmap lines $ runProcessWithInput "bash" [] ("compgen"++concatMap (" -A "++) actions++" -- "
+        f     <- if null actions then return [] 
+                                 else fmap lines $ runProcessWithInput "bash" [] ("compgen"++concatMap (" -A "++) actions++" -- "
                                                             ++ s ++ "\n")
         files <- case f of
-                   [x] -> do fs <- getFileStatus (encodeString x)
+                   [x] -> do fs <- getFileStatus x
                              if isDirectory fs then return [x ++ "/"]
                                                else return [x]
                    _   -> return f

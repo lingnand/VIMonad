@@ -1356,8 +1356,8 @@ printComplList d drw gc fc bc xs ys sss =
                     else (False, fc,bc)
             printStringXMF d drw (fontS st) gc f b x y item)
             -- ansi color printing
-            {-if h then printStringXMF d drw (fontS st) gc f b x y (deANSI item)-}
-                 {-else printANSIColorStr (ansiToHex $ config st) d drw (fontS st) gc f b f b x y item)-}
+            -- if h then printStringXMF d drw (fontS st) gc f b x y (deANSI item)
+            --      else printANSIColorStr (ansiToHex $ config st) d drw (fontS st) gc f b f b x y item)
         ys ss) xs sss
 
 deANSI "" = ""

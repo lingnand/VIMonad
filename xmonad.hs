@@ -20,7 +20,7 @@ import System.IO
 import System.Exit
 import System.Directory
 import Text.Read
-import XMonad
+import XMonad hiding (spawn)
 import XMonad.ManageHook
 import XMonad.Actions.CopyWindow(copy)
 import XMonad.Actions.CycleWS
@@ -69,8 +69,8 @@ import XMonad.Prompt.TaskPrompt
 import XMonad.Prompt.Window
 import XMonad.Prompt.XMonad
 import XMonad.Util.EZConfig
+import XMonad.Util.Run (spawnPipe)
 import XMonad.Util.NamedScratchpad
-import XMonad.Util.Run
 import XMonad.Util.Scratchpad
 import XMonad.Util.Stack
 import XMonad.Util.Themes
@@ -93,10 +93,29 @@ import qualified XMonad.Layout.Groups as G
 import qualified XMonad.StackSet as W
 import qualified XMonad.Util.ExtensibleState as XS
 import System.Posix.User
+import System.Posix.Files
 import Text.Regex.Posix
 import Control.Applicative
 import XMonad.Hooks.EwmhDesktops hiding (fullscreenEventHook)
+import Codec.Binary.UTF8.String
+import System.Posix.Process
+import System.Process (runInteractiveProcess)
 -- }}}
+
+-- redefinition
+spawn s = xfork (executeFile "/bin/sh" False ["-c", s] Nothing) >> return ()
+
+runProcessWithInput :: MonadIO m => FilePath -> [String] -> String -> m String
+runProcessWithInput cmd args input = io $ do
+    (pin, pout, perr, _) <- runInteractiveProcess cmd args Nothing Nothing
+    hPutStr pin input
+    hClose pin
+    output <- hGetContents pout
+    when (output == output) $ return ()
+    hClose pout
+    hClose perr
+    -- no need to waitForProcess, we ignore SIGCHLD
+    return output
 
 ---------------- Constants-- {{{
 
@@ -180,6 +199,7 @@ mySubTheme = SubTheme { winInactiveColor = inactiveColor myTabsTheme
                       }
 
 ---- Promptscheme
+myXPKeymap = emacsLikeXPKeymap' (\c -> not (isAlphaNum c) && c /= '_')
 myXPConfig = defaultXPConfig { 
     font = myBigFont
     , bgColor               = myBgDimLight
@@ -192,7 +212,7 @@ myXPConfig = defaultXPConfig {
     , autoComplete       = Just 250000
     , alwaysHighlight = False
     , searchPredicate = stdSearchPredicate
-    , promptKeymap = emacsLikeXPKeymap
+    , promptKeymap = myXPKeymap
 }
 
 myInfoXPConfig = myXPConfig {
@@ -227,14 +247,12 @@ isTerm = className =? "XTerm"
 hasCmd c = fmap (any (c `isInfixOf`)) $ getQuery wM_COMMAND
 isTermWithCmd c = isTerm <&&> hasCmd c
 -- note that args, cmd are NOT quoted; this is for maximum flexibility - you can then use parameter expansion, etc. if you'd like
-termFullCmd title name args cmd = shellFullCmd $ myTerminal++prop "title" title++prop "name" name++" "++args++" -e "++cmd
+termFullCmd title name args cmd = myTerminal++prop "title" title++prop "name" name++" "++args++" -e "++cmd
     where escapeQuote = replace "'" "\\'"
           prop s v = if null v then "" else " -"++s++" $'"++(escapeQuote v)++"'"
-shellFullCmd cmd dir = "cd $'"++(escapeQuote dir)++"'; "++cmd
-    where escapeQuote = replace "'" "\\'"
 -- runTerm will ALWAYS start the program with the current directory
-runTerm title appname cmd = getCurrentWorkspaceDirectory >>= spawn . termFullCmd title appname "" cmd
-runShell cmd = getCurrentWorkspaceDirectory >>= spawn . shellFullCmd cmd
+runTerm title appname cmd = setCurrentWorkspaceDirectory >> spawn (termFullCmd title appname "" cmd)
+runShell cmd = setCurrentWorkspaceDirectory >> spawn cmd
 
 -- we give up on a dynamically typed UniqueTerm (depending on the type of Context) because it might be easy to query for command only if you don't know what type of the context is
 data UniqueTerm = UniqueTerm { context :: S.Set String
@@ -247,7 +265,7 @@ uniqueTerm cons = UniqueTerm (S.fromList cons)
 uniqueTermAppName :: UniqueTerm -> String
 uniqueTermAppName = show
 
-uniqueTermFullCmd dir ut = termFullCmd (command ut) (uniqueTermAppName ut) (args ut) (command ut) dir
+uniqueTermFullCmd ut = termFullCmd (command ut) (uniqueTermAppName ut) (args ut) (command ut)
 
 -- return the uniqueTerm from the specified app name
 toUniqueTerm :: String -> Maybe UniqueTerm
@@ -265,8 +283,7 @@ uniqueTermHasCmd cmd = fmap (maybe False (== cmd)) uniqueTermCmd
 
 isUniqueTerm ut =  appName =? (uniqueTermAppName ut)
 
-runUniqueTerm dir = spawn . uniqueTermFullCmd dir
-runUniqueTermWithCurrentWSDir ut = getCurrentWorkspaceDirectory >>= \d -> runUniqueTerm d ut
+runUniqueTerm ut = setCurrentWorkspaceDirectory >> spawn (uniqueTermFullCmd ut)
 
 alwaysTrue = liftX $ return True
 alwaysFalse = liftX $ return False
@@ -386,7 +403,7 @@ myStartupHook = do
 
 ---------------- RestartCmd -- {{{
 myKillCmd = "killall dzen2 conky fmclrc trayer;"
-myRestartCmd = myKillCmd ++ "xmonad --recompile; xmonad --restart"
+myRestartCmd = myKillCmd ++ "xmonad --restart"
 -- }}}
 
 ---------------- LayoutHook -- {{{
@@ -855,7 +872,7 @@ scratchpads = [
     {-NS "ranger" (myTerminal++" -name sranger -T ranger -e zsh -ic ranger") (appName =? "sranger") -}
     {-(customFloating $ W.RationalRect (0) (1/2) (1) (1/2)),-}
 
-      NS "mutt" (uniqueTermFullCmd "" uniqueMutt) (isUniqueTerm uniqueMutt) lowerHalfRectHook,
+      NS "mutt" (uniqueTermFullCmd uniqueMutt) (isUniqueTerm uniqueMutt) lowerHalfRectHook,
       NS "pidgin" "pidgin" isPidginBuddyList idHook
     ] 
 
@@ -879,12 +896,12 @@ filterWorkspaces p = do
 invalidWorkspaces = filterWorkspaces (not . validWS)
 
 -- we need to first have a translator that translates workspaceId to unique identifier
-mkPerWSScratchpad cmd = do
-    curr <- gets (W.currentTag . windowset)
-    con <- perWSScratchpadContext curr
-    dir <- getCurrentWorkspaceDirectory
-    let csterm = UniqueTerm con cmd ""
-    mkNamedScratchpad [ NS "cs" (uniqueTermFullCmd dir csterm) (isUniqueTerm csterm) idHook ] "cs"
+{-mkPerWSScratchpad cmd = do-}
+    {-curr <- gets (W.currentTag . windowset)-}
+    {-con <- perWSScratchpadContext curr-}
+    {-dir <- getCurrentWorkspaceDirectory-}
+    {-let csterm = UniqueTerm con cmd ""-}
+    {-mkNamedScratchpad [ NS "cs" (uniqueTermFullCmd dir csterm) (isUniqueTerm csterm) idHook ] "cs"-}
 
 -- swap the handles in addition so as to make sure that the scratchpads match up
 modSwapTo dir = findWorkspace myWorkspaceSort dir validWSType 1 >>= swapWith
@@ -1207,7 +1224,6 @@ launcherPrompt config modes = mkXPromptWithModes modes config
 ----- Dynamic prompt -- {{{
 outputWidth = 200
 outputHeight = 40
-myFasdBin = "fasd"
 symtaglibroot = "~/DB/"
 dphandler = myScriptsDir++"/dphandler"
 
@@ -1232,9 +1248,6 @@ unescape = let tk b cked a = case (b, a, cked) of
                                 (_,       ha:as,   _) -> tk (ha:b) False as 
            in tk "" False
 
-shortend home s = maybe s ("~"++) $ stripPrefix home s
-expandd home s = maybe s (home++) $ stripPrefix "~" s
-correctDir home d = io (canonicalizePath (if null d then home else expandd home d))
 stripSuffix suf s = fmap reverse $ stripPrefix (reverse suf) (reverse s)
 isOutput = (>= outputWidth) . length
 limitSpace l str = take l $ str ++ repeat ' '
@@ -1243,7 +1256,7 @@ limitSpace l str = take l $ str ++ repeat ' '
 fasdLimit = 20
 findLimit = 20
 tagLimit = 20
-grepLimit = 20
+grepLimit = 50
 whichLimit = 20
 evalLimit = 20
 topLimit = 40
@@ -1252,16 +1265,18 @@ isGrepOutput s = isOutput s && ':' `elem` s
 stripGrepOutput = head . splitOn ":"
 isShortcutOutput s = length s > 2 && (s!!1) == ':'
 stripShortcutOutput = last . splitOn ":"
-isSearchFilter s = s `elem` ["f", "a", "d", "z", "l", "t", "g", "which", "diff"] || ((length s) `elem` [1, 2] && (head s) `elem` "'m")
+-- the index i is the i'th arg from the end
+isSearchFilter (i, s) = i > 0 && s `elem` ["f", "a", "d", "z", "l", "t", "g", "gp", "which", "diff"] || ((length s) `elem` [1, 2] && (head s) `elem` "'m")
 isStatDiffOutput = (=~ " +\\| +[0-9]+ [+-]+")
 stripStatDiffOutput = trim . head . splitOn "|" 
 filterDiffOutput ls = case findIndex (isPrefixOf "--- ") ls of
-                            Just i | i > 0 && i < length ls - 1 && isPrefixOf "+++ " (ls !! (i+1)) && isPrefixOf "index " (ls !! (i-1)) -> 
+                            Just i | i > 0 && i < length ls - 1 && (cxt (i-1) (i+1) || cxt (i+1) (i-1)) ->
                                                 case stripPrefix "--- a/" (ls !! i) of
                                                      Just r -> (trim r):fr
                                                      _ -> fr
                                    | otherwise -> fr
                                 where fr = filterDiffOutput $ snd $ splitAt (i+2) ls
+                                      cxt n m = isPrefixOf "+++ " (ls !! n) && isPrefixOf "index " (ls !! m)
                             _ -> []
 
 data PromptWidget = PromptWidget { promptPrefix :: String
@@ -1279,7 +1294,7 @@ dwgt p pre cf act = PromptWidget { promptPrefix = pre
                                  , promptAction = act
                                  , promptHighlightPredicate = highlightPredicate p
                                  }
-isWidgetFilter = flip elem (fmap promptPrefix dynamicPromptWidgets)
+isWidgetFilter (i, s) = i > 0 && s `elem` (fmap promptPrefix dynamicPromptWidgets)
 widgetCmd w c = let p = promptPrefix w++" " in joinStr p $ tail $ splitOn p c
 findWidget pre = find ((==pre) . promptPrefix) dynamicPromptWidgets
 findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) $ fmap (\w -> (stripPrefix (promptPrefix w ++ " ") c, w)) dynamicPromptWidgets
@@ -1299,10 +1314,10 @@ evalStr s = let evalcomps = splitOn "`" s
             in if odd evallen && evallen >= 3 then (head evalcomps, head t, joinStr "`" $ tail t)
                                               else (s,"","")
 
+stripIndex (a, b) = (fmap snd a, fmap snd b)
 dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
-                case break (\s -> isSearchFilter s || isWidgetFilter s) (reverse args) of
+                case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) $ zip [0..] $ reverse args of
                    (_:_, "z":bef) | not hl -> joinStr " " $ reverse bef ++ ["c", escape (head l)]
-                   (_:_, "g":bef) | not hl -> joinStr " " $ reverse bef ++ [stripGrepOutput $ escape (head l)]
                    ([], ('\'':pre):bef) -> exactMatch $ fmap stripShortcutOutput l
                    ([], ('m':pre):_) -> c
                    (_, "which":bef) | all ((`elem` "~/") . head) l && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
@@ -1312,9 +1327,11 @@ dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
                                                            in joinStr " " $ reverse bef ++ [w, promptNextCompletion wp (widgetCmd wp c) l]
                    -- we have to specify manually so the 'm' case above when there is some sort of the string on its right would sift through here
                    (_:_, f:bef) | f `elem` ["f", "a", "d", "l", "t", "which"] && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
-                   _ | all isGrepOutput l -> exactMatch $ fmap stripGrepOutput l
+                   _ | all isGrepOutput l -> joinStr " " $ takeWhile (\t -> t /="g" && t /= "gp") (init args) ++ case exactNext $ fmap stripGrepOutput l of
+                                                                                          [] -> []
+                                                                                          s -> [s]
                      | all isShortcutOutput l -> exactMatch $ fmap stripShortcutOutput l
-                     | length fsdo == length l - 1 -> exactMatch $ fmap stripStatDiffOutput fsdo
+                     | not (null fsdo) && length fsdo == length l - 1 -> exactMatch $ fmap stripStatDiffOutput fsdo
                      | not (null fdo) -> exactMatch fdo
                      | not (null evalstr) ->  evall ++ escape (head l) ++ evalr
                      | all isOutput l && any ("commit" `isPrefixOf`) l && any ("Author" `isPrefixOf`) l && any ("Date" `isPrefixOf`) l -> exactMatch $ fmap (fromJust . stripPrefix "commit " . trim) $ filter ("commit " `isPrefixOf`) l
@@ -1325,14 +1342,14 @@ dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
                    (evall, evalstr, evalr) = evalStr c
                    fdo = filterDiffOutput l
                    fsdo = filter isStatDiffOutput l
-                   exactMatch ls = fromMaybe "" (stripSuffix lastArg c) ++ (escape $ exactNext ls)   
-                   exactNext ls = let rev = reverse ls in rev !! case findIndex (== unescape lastArg) rev of
+                   exactMatch ls = fromMaybe "" (stripSuffix lastArg c) ++ exactNext ls
+                   exactNext ls = let rev = reverse ls in escape $ rev !! case findIndex (== unescape lastArg) rev of
                                Just i -> if i <= 0 then length ls - 1 else (i-1)
                                Nothing -> length ls - 1 
 
-dpromptHighlightPredicate cl cmd = case break (\s -> isSearchFilter s || isWidgetFilter s) (reverse args) of
-                (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
-                                                    in promptHighlightPredicate wp cl (widgetCmd wp cmd)
+dpromptHighlightPredicate cl cmd = case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) (zip [0..] $ reverse args) of
+                (_:_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                                                      in promptHighlightPredicate wp cl (widgetCmd wp cmd)
                 _ | isGrepOutput cl -> stripGrepOutput cl == unescapedLastArg
                   | isShortcutOutput cl -> stripShortcutOutput cl == unescapedLastArg
                   | not (null unescapedLastArg) && ("--- a/"++unescapedLastArg) `isPrefixOf` cl -> True
@@ -1348,7 +1365,7 @@ whenNull ma mb = do
     l <- ma
     if null l then mb else return l
 
-dpromptComplFunc c cmds home fasdf fasdd s = do
+dpromptComplFunc c cmds home s = do
         let args = parseShellArgs s
             lastArg = if null args then "" else last args
             unescapedArgs = map unescape args
@@ -1356,7 +1373,7 @@ dpromptComplFunc c cmds home fasdf fasdd s = do
             shtout = fmap (fmap sht)
             epd = expandd home
             sp = searchPredicate c
-            fasd aft set = return $ take fasdLimit $ filter (sp $ joinStr " " aft) set
+            fasd args = shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfasd") (show fasdLimit:args) ""
             sct pre = fmap lines $ runProcessWithInput (myScriptsDir++"/xshortcut") [ "print", pre ] ""
             ntailsp = length $ takeWhile isSpace (reverse s)
             output pro ags = fmap (map (limitSpace outputWidth . sht) . lines) $ runProcessWithInput pro ags ""
@@ -1365,19 +1382,32 @@ dpromptComplFunc c cmds home fasdf fasdd s = do
             scopecmp = case reverse unescapedArgs of
                                    "":fa:_ | ntailsp == 1 -> output "/home/lingnan/bin/scope" [epd fa, show outputWidth, show outputHeight, show outputHeight]
                                    _ -> return [] 
-            shellcmp = let scs = if length args > 1 then [] else cmds
-                           sas = if (head unescapedArgs) `elem` ["c", "cd"] then ["directory"] else ["file"]
-                       in shtout $ getShellCompl' False sas scs $ epd lastArg
-        case break (\s -> isSearchFilter s || isWidgetFilter s) (reverse unescapedArgs) of
-                    (af:afs, "f":_) -> shtout $ fasd (reverse $ af:afs) fasdf
-                    (af:afs, "d":_) -> shtout $ fasd (reverse $ af:afs) fasdd
-                    (af:afs, "a":_) -> shtout $ fasd (reverse $ af:afs) $ fasdf++fasdd
-                    (af:afs, "z":_) -> shtout $ fasd (reverse $ af:afs) $ fasdd
+            shellcmp = let (scs, sas) = case head unescapedArgs of
+                                "man" -> (cmds, [])
+                                "du" -> ([], ["file"])
+                                "c" -> ([], ["directory"])
+                                "cd" -> ([], ["directory"])
+                                _ | length args > 1 -> ([], ["file"])
+                                  | otherwise -> (cmds, ["file"])
+                       in shellcmp' sas scs
+            shellcmp' sas scs = shtout $ getShellCompl' False sas scs $ epd lastArg
+            grepcmp' cmd aft = fmap (filter (':' `elem`)) $ output (myScriptsDir++"/"++cmd) $ show grepLimit:(fmap epd aft)
+            grepcmp = grepcmp' "xgrep"
+            pgrepcmp = grepcmp' "xpdfgrep"
+        case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) (zip [0..] $ reverse unescapedArgs) of
+                    (af:afs, "f":_) -> fasd $ ["-f", "-B", "viminfo"] ++ (reverse $ af:afs)
+                    (af:afs, "d":_) -> fasd $ "-d" : (reverse $ af:afs)
+                    (af:afs, "a":_) -> fasd $ ["-a", "-B", "viminfo"] ++ (reverse $ af:afs)
+                    (af:afs, "z":_) -> fasd $ "-d" : (reverse $ af:afs)
                     ([], ('\'':pre:[]):_) -> shtout $ sct [pre]
                     ([], ('m':pre:[]):_) | pre /= 'v' -> shtout $ sct [pre]
                     (af:afs, "l":_) -> shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ reverse (af:afs))) ""
+                    -- for g, we demand that at least SOME search term is entered, otherwise we don't generate the necessary output
+                    (af:afs, "g":_) | afs == [] -> trycmp $ (if af == "" then [] else [grepcmp (reverse $ af:afs)]) ++ [shellcmp' ["file"] []]
+                                    | otherwise -> grepcmp (reverse $ af:afs)
+                    (af:afs, "gp":_) | afs == [] -> shellcmp' ["file"] []
+                                     | not (null afs) && af == "" -> pgrepcmp (reverse $ af:afs)
                     (af:afs, "t":_) -> shtout $ fmap (fmap (symtaglibroot++) . lines) $ runProcessWithInput "symtag" [ "print", "false", "%t", show tagLimit, joinStr ".*" ([""]++(reverse (af:afs))++[""]) ] ""
-                    (af:afs, "g":_) -> fmap (filter (':' `elem`)) $ output (myScriptsDir++"/xgrep") $ [show grepLimit, "-R"] ++ (fmap epd $ reverse (af:afs))
                     (af:afs, "which":_) -> 
                         let ha = head cas
                             cas = reverse $ af:afs
@@ -1391,6 +1421,7 @@ dpromptComplFunc c cmds home fasdf fasdd s = do
                     _ | not (null evalstr) -> shtout $ fmap (take evalLimit . lines) $ runProcessWithInput "bash" ["-c", evalstr] ""
                       | otherwise -> case unescapedArgs of
                             "man":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xman") $ show outputWidth:show outputHeight:pa:pai:pas
+                            "du":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xdu") $ show outputHeight:pa:pai:pas
                             ["ip", pa] -> return $ filter (sp pa) ["addr", "addrlabel", "link", "maddr", "mroute", "neigh", "route", "rule", "tunnel"]
                             "ip":pas | lastArg == "" -> output "ip" $ init pas
                             ["top", ""] | ntailsp == 1-> output (myScriptsDir++"/xtop") [show topLimit]
@@ -1403,7 +1434,7 @@ dpromptComplFunc c cmds home fasdf fasdd s = do
                             "git":pa:_ -> trycmp [output "git" $ ["log", "--grep", last unescapedArgs], scopecmp, shellcmp]
                             _ -> trycmp [scopecmp, shellcmp]
 
-dpromptAction c cmds home fasdf fasdd s = 
+dpromptAction c cmds home s = 
         -- perform some special actions on some commands
         let args = parseShellArgs s
         in case (findWidgetForAction s, args) of
@@ -1415,22 +1446,31 @@ dpromptAction c cmds home fasdf fasdd s =
                                          else case head pas of
                                                  "-" -> getCurrentWorkspaceOldDirectory
                                                  p -> return $ unescape p
-                                 (correctDir home d) `catchX` (return home) >>= saveCurrentWorkspaceDirectory 
-                                 dynamicPrompt' c cmds home fasdf fasdd
+                                 saveCurrentWorkspaceDirectory d
+                                 dynamicPrompt' c cmds home
                             | otherwise -> spawn $ dphandler++" "++if null s then "." else s
+
+divide' _ [] (r, w) = (reverse r, reverse w)
+divide' p (x:xs) (r, w) = divide' p xs $ if p x then (x:r, w) else (r, x:w)
+divide p l = divide' p l ([],[])
 
 dynamicPrompt c = do
     cmds <- io getCommands
     home <- io $ env "HOME" "/home/lingnan"
     -- to better fasd performace, we can first extract out all the values for the fasd components
-    fasdf <- fmap lines $ runProcessWithInput myFasdBin ["-R","-f","-l","-B","viminfo"] ""
-    fasdd <- fmap lines $ runProcessWithInput myFasdBin ["-R","-d","-l"] ""
-    dynamicPrompt' c cmds home fasdf fasdd
+    ------ let isd p = io (getFileStatus p >>= return . isDirectory) `catchX` (return False)
+    ------ fasdl <- fmap lines $ runProcessWithInput (myScriptsDir++"/xfasd") [] ""
+    ------ isds <- mapM isd fasdl
+    -- let (fasdd', fasdf') = divide snd $ zip fasdl isds
+    --     fasdd = fst $ unzip fasdd'
+    --     fasdf = fst $ unzip fasdf'
+    dynamicPrompt' c cmds home
 
-dynamicPrompt' c cmds home fasdf fasdd = do
-    d <- (getCurrentWorkspaceDirectory >>= correctDir home) `catchX` (return home)
+dynamicPrompt' c cmds home = do
+    d <- getCurrentWorkspaceDirectory
     io $ setCurrentDirectory d
-    mkXPrompt (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home fasdf fasdd) (dpromptAction c cmds home fasdf fasdd)
+    home <- io $ getHomeDirectory
+    mkXPrompt (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home) (dpromptAction c cmds home)
 -- }}}
 
 ----- Calculator prompt -- {{{
@@ -1455,32 +1495,30 @@ calcMode = XPT CalcMode
 ----- Dictionary / sdcv prompt -- {{{
 
 sdcvBin = myScriptsDir++"/xsdcv"
-chsdcvBin = myScriptsDir++"/chxsdcv"
 
 sdLength = "250"
 
-data StarDictMode = SDMode { bin :: String
-                           , prompt :: String
+data StarDictMode = SDMode { prompt :: String
                            , dictName :: String
                            }
 
 instance XPrompt StarDictMode where
-    showXPrompt (SDMode _ p _) = p
+    showXPrompt (SDMode p _) = p
     commandToComplete _ = id
-    completionFunction (SDMode bin _ d) = \s -> if (length s == 0) then return [] else do
-        fmap lines $ runProcessWithInput bin [d, s, sdLength] ""
-    modeAction _ query _ = safeSpawn "espeak" [query]
+    completionFunction (SDMode _ d) = \s -> if (length s == 0) then return [] else do
+        fmap lines $ runProcessWithInput sdcvBin [d, s, sdLength] ""
+    modeAction _ query _ = spawn $ "espeak" ++ " " ++ query
     nextCompletion _ c _ =  c
     highlightPredicate _ _ _ = False
-mkSDMode p d = XPT $ SDMode sdcvBin p d
-mkCHSDMode p d = XPT $ SDMode chsdcvBin p d
-defaultSDMode = SDMode sdcvBin "Collins Cobuild 5 > " "Collins Cobuild 5"
+mkSDMode p d = XPT $ SDMode p d
+defaultSDMode = SDMode "Collins Cobuild 5 > " "Collins Cobuild 5"
+defaultEngDictModes = [XPT $ defaultSDMode, mkSDMode  "English Thesaurus > " "English Thesaurus"]
+defaultChDictModes = [mkSDMode "现代汉语词典 > " "Modern Chinese Dictionary", mkSDMode  "汉语大词典 > " "Chinese Big Dictionary"]
+defaultCalcModes = [calcMode]
 
 defaultModesForInput (c:cs)
-    | isNumber c || isSymbol c = [calcMode]
-    | c `elem` ['a'..'z'] = [XPT $ defaultSDMode, mkSDMode  "English Thesaurus > " "English Thesaurus", mkSDMode  "Merrian Webster > " "Merrian Webster 10th dictionary"]
-    -- we assume that such case means that we need to use Chinese dictionaries
-    | otherwise = [mkCHSDMode "现代汉语词典 > " "Modern Chinese Dictionary", mkCHSDMode  "汉语大词典 > " "Chinese Big Dictionary"]
+    | isNumber c || isSymbol c = defaultCalcModes
+    | otherwise = defaultEngDictModes ++ defaultChDictModes
 -- }}}
 
 ----- Vimb prompt -- {{{
@@ -1492,7 +1530,7 @@ vbNextCompletion cmd ls = last $ words $ ls !! ni
                       Just i -> if i >= length ls - 1 then 0 else i+1
                       Nothing -> 0 
 vbHighlightPredicate = flip vbIsEqualToCompletion
-vbAction s = spawn $ "vb "++(escapeQuery s)
+vbAction s = getCurrentWorkspaceDirectory >>= \d -> runShell $ "vb -C " ++ escapeQuery ("set download-path="++d) ++ " " ++ escapeQuery s
 ----- if it's empty then return the top 10 results from history
 vbComplFunc s
     | null $ trim s = do fmap lines $ runProcessWithInput "vbhistory" [(show vbhistorySize)] "" 
@@ -1510,7 +1548,7 @@ vbIsEqualToCompletion cmd cl = cmd == (last $ words cl)
 mkVBPrompt c = mkXPrompt VBPrompt c vbComplFunc vbAction
 vbPrompt = mkVBPrompt myXPConfig {
   autoComplete = Nothing
-  , promptKeymap = M.fromList $ (M.toList emacsLikeXPKeymap)++[
+  , promptKeymap = M.fromList $ (M.toList myXPKeymap)++[
   ((myModMask, xK_v), quit)
   ]
 }
@@ -1525,7 +1563,7 @@ instance XPrompt WikiMode where
     commandToComplete WkMode = id
     completionFunction WkMode = \s -> if (length s == 0) then return [] else do
         fmap lines $ runProcessWithInput "wiki" [s, "200"] ""
-    modeAction WkMode query tx = safeSpawn "vp" ["w",escapeQuery query]
+    modeAction WkMode query tx = spawn $ "vp" ++ " w " ++ escapeQuery query
 
 wkMode :: XPMode
 wkMode = XPT WkMode
@@ -1542,7 +1580,7 @@ escapeq (m:ms) = case m of
                           '\'' -> "'\"'\"'" ++ escapeq ms
                           _ -> [m] ++ escapeq ms
 
-escapeQuery m = '\'' : ((escapeq m) ++ "\'")
+escapeQuery m = '\'' : ((escapeq m) ++ "'")
                           
 
 instance XPrompt WolframMode where
@@ -1550,7 +1588,7 @@ instance XPrompt WolframMode where
     commandToComplete WAMode = id
     completionFunction WAMode = \s -> if (length s == 0) then return [] else do
         fmap lines $ runProcessWithInput "wa" [s] "" 
-    modeAction WAMode query tx = safeSpawn "vp" ["wa",escapeQuery query]
+    modeAction WAMode query tx = spawn $ "vp wa " ++ escapeQuery query
 
 waMode :: XPMode
 waMode = XPT WAMode
@@ -1803,7 +1841,7 @@ taskGroups = [
           , filterKey = "b"
           , filterPredicate = className =? "Vimb"
           {-, construct = runShell "vimb \"`tail -n1 ~/.config/vimb/history | cut -d'\t' -f1`\""-}
-          , construct = runShell "vb"
+          , construct = vbAction ""
           {-, launchHook = ask >>= doF . -}
           -- green
           , colorScheme = mySubTheme { winInactiveColor = "#1d371d"
@@ -1855,7 +1893,7 @@ taskGroups = [
     , def { taskGroupName = "zathura"
           , filterKey = "z"
           , filterPredicate = className =? "Zathura"
-          , construct = spawn "zathura"
+          , construct = runShell "zathura"
           -- red
           , colorScheme = mySubTheme { winInactiveColor = "#371921"
                                      , winActiveColor = "#7f334a"
@@ -2174,13 +2212,19 @@ myKeys toggleFadeSet =
     , g <- allTaskGroupsWithFilterKey ["d", "S-d"] ]
     -- }}}
     ----- Info prompt system (now centralized as an intelligent system) -- {{{
+    {-++-}
+    {-[ ("M-c "++[c], launcherPrompt myInfoXPConfig {defaultText = [c]} $ defaultModesForInput [c])-}
+    {-| c <- "-+="++['0'..'9']++['a'..'z'] ]-}
+    {-++-}
+    {-[("M-c <Return>", do-}
+        {-l <- fmap (head . lines) $ runProcessWithInput "xsel" [] ""-}
+        {-launcherPrompt myInfoXPConfig {defaultText = l} $ defaultModesForInput l)]-}
     ++
-    [ ("M-c "++[c], launcherPrompt myInfoXPConfig {defaultText = [c]} $ defaultModesForInput [c])
-    | c <- "-+="++['0'..'9']++['a'..'z'] ]
-    ++
-    [("M-c <Return>", do
-        l <- fmap (head . lines) $ runProcessWithInput "xsel" [] ""
-        launcherPrompt myInfoXPConfig {defaultText = l} $ defaultModesForInput l)]
+    [
+      ("M-c", launcherPrompt myInfoXPConfig defaultCalcModes)
+    , ("M-v", launcherPrompt myInfoXPConfig defaultEngDictModes)
+    , ("M-S-v", launcherPrompt myInfoXPConfig defaultChDictModes)
+    ]
     -- }}}
     ----- Common Tasks-- {{{
     ++
@@ -2231,12 +2275,12 @@ myKeys toggleFadeSet =
     [ -- launcher
       ("M-z", mkTaskPrompt myXPConfig {
             autoComplete = Nothing
-            , promptKeymap = M.fromList $ (M.toList emacsLikeXPKeymap)++[
+            , promptKeymap = M.fromList $ (M.toList myXPKeymap)++[
                 ((myModMask, xK_z), quit)
             ]})
     , ("M-y", mkFMCPrompt myXPConfig {
             autoComplete = Just 0
-            , promptKeymap = M.fromList $ (M.toList emacsLikeXPKeymap)++[
+            , promptKeymap = M.fromList $ (M.toList myXPKeymap)++[
                 ((myModMask, xK_y), quit)
             ]})
     -- }}}
