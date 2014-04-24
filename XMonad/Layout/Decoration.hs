@@ -74,6 +74,8 @@ data SubTheme = SubTheme { winActiveColor :: String
                          , winInactiveColor :: String
                          , winInactiveBorderColor :: String
                          , winInactiveTextColor :: String
+                         , winTitleAddons :: [(String, Align)]
+                         , winTitleIcons  :: [([[Bool]], Placement)]
                          } 
 
 -- For a collection of 'Theme's see "XMonad.Util.Themes"
@@ -408,26 +410,29 @@ updateDeco sh t fs ((w,_),(Just dw,Just (Rectangle _ _ wh ht))) = do
   ur  <- readUrgents
   dpy <- asks display
   focus <- gets (W.peek . windowset)
-  let focusColor win ic ac uc = do
-         mst <- (subThemeForWindow t) win
-         case (focus, win, mst) of 
-            (Just fw, w, Just st) | fw == w -> return (winActiveColor st, winActiveBorderColor st, winActiveTextColor st)
-                                  | win `elem` ur -> return uc
-                                  | otherwise -> return (winInactiveColor st, winInactiveBorderColor st, winInactiveTextColor st)
-            (Just fw, w, _)  | fw == w -> return ac
-                             | win `elem` ur -> return uc
-                             | otherwise -> return ic
-            _ -> return ic
-  (bc,borderc,tc) <- focusColor w (inactiveColor t, inactiveBorderColor t, inactiveTextColor t)
+  mst <- (subThemeForWindow t) w
+  let focusColor ic ac uc = 
+         case (focus, mst) of 
+            (Just fw, Just st) | fw == w -> (winActiveColor st, winActiveBorderColor st, winActiveTextColor st)
+                               | w `elem` ur -> uc
+                               | otherwise -> (winInactiveColor st, winInactiveBorderColor st, winInactiveTextColor st)
+            (Just fw, _)  | fw == w -> ac
+                          | w `elem` ur -> uc
+                          | otherwise -> ic
+            _ -> ic
+      (bc,borderc,tc) = focusColor (inactiveColor t, inactiveBorderColor t, inactiveTextColor t)
                                   (activeColor   t, activeBorderColor   t, activeTextColor   t)
                                   (urgentColor   t, urgentBorderColor   t, urgentTextColor   t)
-  let s = shrinkIt sh
+      (atitles, aicons) = case mst of
+                              Just st -> (winTitleAddons st, winTitleIcons st)
+                              _ -> (windowTitleAddons t, windowTitleIcons t)
+      s = shrinkIt sh
   name <- shrinkWhile s (\n -> do size <- io $ textWidthXMF dpy fs n
                                   return $ size > fromIntegral wh - fromIntegral (ht `div` 2)) (show nw)
-  let als = AlignCenter : map snd (windowTitleAddons t)
-      strs = name : map fst (windowTitleAddons t)
-      i_als = map snd (windowTitleIcons t)
-      icons = map fst (windowTitleIcons t)
+  let als = AlignCenter : map snd atitles
+      strs = name : map fst atitles
+      i_als = map snd aicons
+      icons = map fst aicons
   paintTextAndIcons dw fs wh ht 1 bc borderc tc bc als strs i_als icons
 updateDeco _ _ _ (_,(Just w,Nothing)) = hideWindow w
 updateDeco _ _ _ _ = return ()

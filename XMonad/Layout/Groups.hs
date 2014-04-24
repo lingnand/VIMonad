@@ -32,6 +32,7 @@ module XMonad.Layout.Groups ( -- * Usage
                             , swapDown
                             , swapWith
                             , swapWithLast
+                            , insertAt
                             , swapMaster
                             , focusUp
                             , focusDown
@@ -52,6 +53,10 @@ module XMonad.Layout.Groups ( -- * Usage
                             , moveToNewGroupDown
                             , moveToGroupAt
                             , splitGroup
+                            , moveWindowsToNewGroupUp
+                            , moveWindowsToNewGroupDown
+                            , moveWindowsUp
+                            , moveWindowsDown
                             , collapse
                               -- * Types
                             , Groups(..)
@@ -762,6 +767,18 @@ swapWithZ _ (Just s) = Just s
 swapWith :: Int -> ModifySpec
 swapWith = onFocused . swapWithZ
 
+-- insert the focused window at the i'th position
+insertAtZ :: Int -> Zipper a -> Zipper a
+insertAtZ _ Nothing = Nothing
+insertAtZ i (Just s@(W.Stack f up down))
+    | i < 0 = Nothing
+    | i < length up = let (bf, af) = splitAt i (reverse up) in Just $ W.Stack f (reverse bf) (af++down)
+    | i == length up = Just s
+    | otherwise = let (bf, af) = splitAt (i-(length up)) down in Just $ W.Stack f ((reverse bf) ++ up) af
+
+insertAt :: Int -> ModifySpec
+insertAt = onFocused . insertAtZ
+
 swapWithLastZ :: Zipper a -> Zipper a
 swapWithLastZ Nothing = Nothing
 swapWithLastZ (Just (W.Stack f up down)) 
@@ -870,7 +887,48 @@ moveToNewGroupDown :: ModifySpec
 moveToNewGroupDown _ Nothing = Nothing
 moveToNewGroupDown l0 (Just s) = _moveToNewGroup l0 s insertDownZ
 
+removeWindows wins (G l Nothing) = (G l Nothing)
+removeWindows wins (G l (Just (W.Stack f u d))) 
+    | not (f `elem` wins) = G l $ Just $ W.Stack f fu fd
+    | not (null fd) = G l $ Just $ W.Stack (head fd) fu (tail fd)
+    | not (null fu) = G l $ Just $ W.Stack (head fu) (tail fu) fd
+    | otherwise =  G l $ Nothing
+        where ft = filter (not . (`elem` wins))
+              fu = ft u
+              fd = ft d
 
+moveWindowsToNewGroup :: T.Direction1D -> (Maybe (W.Stack Window)) -> ModifySpec
+moveWindowsToNewGroup _ Nothing _ s = s
+moveWindowsToNewGroup dir ws l0 s@(Just (W.Stack f up down)) =
+    -- first take all the windows out of the stack
+    let f' = removeWindows (W.integrate' ws) f
+    in case (f', dir) of
+            (G _ (Just _), T.Prev) -> insertUpZ (G l0 ws) $ Just $ W.Stack f' up down
+            (G _ (Just _), T.Next) -> insertDownZ (G l0 ws) $ Just $ W.Stack f' up down
+            _ -> s
+
+moveWindowsToNewGroupUp = moveWindowsToNewGroup T.Prev
+moveWindowsToNewGroupDown = moveWindowsToNewGroup T.Next
+
+moveWindows :: T.Direction1D -> (Maybe (W.Stack Window)) -> ModifySpec
+moveWindows _ Nothing _ s = s
+moveWindows _ _ _ s@(Just (W.Stack f [] [])) = s
+moveWindows dir ws@(Just (W.Stack wf wu wd)) l0 (Just s@(W.Stack f up down)) = 
+    -- first get the particular group to move the windows to 
+    let f' = removeWindows (W.integrate' ws) f
+        fl = case f' of
+                  G _ Nothing -> []
+                  _ -> [f']
+        insertG (G l (Just (W.Stack f u d))) = G l (Just (W.Stack wf (wu++u) (wd++[f]++d)))
+        insertG x = x
+    in case (up, down, dir) of
+        ([], _, T.Prev) -> Just $ W.Stack (insertG $ last down) ((reverse $ init down) ++ fl) []
+        (uh:ul, _, T.Prev) -> Just $ W.Stack (insertG uh) ul (fl++down)
+        (_, [], T.Next) -> Just $ W.Stack (insertG $ last up) [] ((reverse $ init up) ++ fl)
+        (_, dh:dl, T.Next) -> Just $ W.Stack (insertG dh) (fl++up) dl
+
+moveWindowsUp = moveWindows T.Prev
+moveWindowsDown = moveWindows T.Next
 -- | Move the focused window to the previous group.
 -- If 'True', when in the first group, wrap around to the last one.
 -- If 'False', create a new group before it.

@@ -899,8 +899,8 @@ defaultXPKeymap' p = M.fromList $
 -- | A keymap with many emacs-like key bindings.  Click on the
 --   \"Source\" link to the right to see the complete list.
 --   See also 'emacsLikeXPKeymap''.
-emacsLikeXPKeymap :: M.Map (KeyMask,KeySym) (XP ())
-emacsLikeXPKeymap = emacsLikeXPKeymap' isSpace
+emacsLikeXPKeymap :: HistoryMatches -> M.Map (KeyMask,KeySym) (XP ())
+emacsLikeXPKeymap ref = emacsLikeXPKeymap' isSpace ref
 
 -- | A variant of 'emacsLikeXPKeymap' which lets you specify a custom
 --   predicate for identifying non-word characters, which affects all
@@ -909,7 +909,7 @@ emacsLikeXPKeymap = emacsLikeXPKeymap' isSpace
 --   would be considered as a single word.  You could use a predicate
 --   like @(\\c -> isSpace c || c == \'\/\')@ to move through or
 --   delete components of the path one at a time.
-emacsLikeXPKeymap' :: (Char -> Bool) -> M.Map (KeyMask,KeySym) (XP ())
+emacsLikeXPKeymap' :: (Char -> Bool) -> HistoryMatches -> M.Map (KeyMask,KeySym) (XP ())
 {-emacsLikeXPKeymap' p = M.fromList $-}
   {-map (first $ (,) controlMask) -- control + <key>-}
   {-[ (xK_z, killBefore) --kill line backwards-}
@@ -946,15 +946,15 @@ emacsLikeXPKeymap' :: (Char -> Bool) -> M.Map (KeyMask,KeySym) (XP ())
   {-, (xK_Up, moveHistory W.focusDown')-}
   {-, (xK_Escape, quit)-}
   {-]-}
-emacsLikeXPKeymap' p = M.fromList $
+emacsLikeXPKeymap' p ref = M.fromList $
   map (first $ (,) controlMask) -- control + <key>
   [ (xK_z, killBefore) --kill line backwards
   , (xK_g, quit)
   , (xK_bracketleft, quit)
   , (xK_BackSpace, killWord' p Prev) -- kill the previous word
   -- navigation
-  , (xK_n, moveHistory W.focusUp')
-  , (xK_p, moveHistory W.focusDown')
+  , (xK_n, historyDownMatching ref)
+  , (xK_p, historyUpMatching ref)
   , (xK_b, moveCursor Prev) -- move cursor forward
   , (xK_f, moveCursor Next) -- move cursor backward
   -- some vim bindings
