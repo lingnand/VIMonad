@@ -68,6 +68,7 @@ module XMonad.Layout.Groups ( -- * Usage
                             , sameID
                             , GroupsManageHook
                             , MultiStack(..)
+                            , filter
                             , GStack
                             , toZipper
                             , fromZipper
@@ -100,8 +101,9 @@ import qualified XMonad.StackSet as W
 
 import XMonad.Util.Stack
 
+import Prelude hiding (filter)
+import qualified Data.List as L ((\\), maximumBy, find, filter)
 import Data.Maybe (isJust, isNothing, fromMaybe, catMaybes, fromJust)
-import Data.List ((\\), elemIndex, maximumBy, sortBy, find)
 import Data.Either
 import Data.Tuple
 import Text.Read
@@ -308,7 +310,7 @@ removeDeleted z = filterZ_ (flip elemZ z)
 findNewWindows :: Eq a => [a] -> Zipper (Group l a)
                -> (Zipper (Group l a), [a])
 findNewWindows as gs = (gs, foldrZ_ removePresent as gs)
-    where removePresent g as' = filter (not . flip elemZ (gZipper g)) as'
+    where removePresent g as' = L.filter (not . flip elemZ (gZipper g)) as'
 
 -- | Add windows to the focused group. If you need to create one,
 -- use the given layout and an id from the given list.
@@ -348,6 +350,20 @@ deriving instance V.Traversable MultiStack
 
 type GStack = MultiStack Window
 
+filter fun (Node (W.Stack f u d)) = 
+    let f' = filter fun f
+        ft = fmap (filter fun)
+        u' = ft u
+        d' = ft d
+    in case W.filter isJust (W.Stack f' u' d') of
+            Just (W.Stack nf nu nd) -> Just $ Node $ W.Stack (fromJust nf) (fmap fromJust nu) (fmap fromJust nd)
+            _ -> Nothing
+filter fun (Leaf (Just s@(W.Stack f u d))) =
+    case W.filter fun s of
+         Just s' -> Just $ Leaf $ Just s'
+         _ -> Nothing
+filter _ _ = Nothing
+
 {-instance Functor MultiStack where-}
     {-fmap f (Leaf (Just (W.Stack f' u' d'))) = Leaf $ Just $ W.Stack (f f') (fmap f u') (fmap f d')-}
     {-fmap f (Leaf Nothing) = Leaf Nothing-}
@@ -384,7 +400,7 @@ bases s@(Node (W.Stack (Leaf _) u d)) = Just s
 bases (Node (W.Stack f u d)) = case bases f of
                                     Just (Node (W.Stack f' u' d')) -> Just $ Node $ W.Stack f' (u'++(concatMap reverse $ pl u)) (d'++(concat $ pl d))
                                     _ -> Nothing
-            where pl = fmap ((\(Node s) -> W.integrate s) . fromJust) . filter isJust . fmap bases
+            where pl = fmap ((\(Node s) -> W.integrate s) . fromJust) . L.filter isJust . fmap bases
 bases (Leaf _) = Nothing
 
 groupAt i (Leaf s) = Nothing
@@ -435,13 +451,13 @@ toGroupsZipper l0 oz (Just (Node s@(W.Stack f u d))) =
     -- we need to run an estimation here for retaining the same layout for the same set of windows
     let (bef,nf:aft) = splitAt (length u) $ fst $ foldr match ([], fmap (\(G l z') -> (W.integrate' z', l)) $ W.integrate' oz) $ fmap toZipper $ W.integrate s
         match zp (r,cls) = let wins = W.integrate' zp
-                               score = length . filter (`elem` wins)
+                               score = length . L.filter (`elem` wins)
                                (wss, gls) = unzip cls
-                               (res, rls) = case (cls, maximumBy (\(s1,_,_) (s2,_,_)-> compare s1 s2) $ zip3 (fmap score wss) wss gls) of
+                               (res, rls) = case (cls, L.maximumBy (\(s1,_,_) (s2,_,_)-> compare s1 s2) $ zip3 (fmap score wss) wss gls) of
                                                  ([],_) -> (l0, [])
                                                  (_,(s,ws,l)) 
                                                     | s == 0 -> (l0, cls)
-                                                    | otherwise -> (l, filter ((/=ws) . fst) cls)
+                                                    | otherwise -> (l, L.filter ((/=ws) . fst) cls)
                            in ((G res zp):r, rls)
     in Just $ W.Stack nf (reverse bef) aft
 toGroupsZipper _ _ _ = Nothing
@@ -451,7 +467,7 @@ getCurrentGStack = gets (W.currentTag . windowset) >>= getGStackForWSTag
 getGStackForWSTag t = do
     -- send the message to the current layout for saving the information regarding
     wss <- gets (W.workspaces . windowset)
-    case find ((==t) . W.tag) wss of
+    case L.find ((==t) . W.tag) wss of
          Just ws -> getGStack $ W.layout ws
          _ -> return Nothing
 
@@ -476,7 +492,7 @@ applyGStack' mn@(Node ns@(W.Stack _ u _)) send = do
 
 applyGStackForWSTag t gs = do
     wss <- gets (W.workspaces . windowset)
-    case find ((==t) . W.tag) wss of
+    case L.find ((==t) . W.tag) wss of
          -- for some weird reason it's not working when using custom send methods (even with the exact same code)
          {-Just ws -> applyGStack' gs (\m -> do-}
                          {-ml' <- handleMessage (W.layout ws) (SomeMessage m) `catchX` return Nothing -}
@@ -595,7 +611,7 @@ instance (LayoutClass l Window, LayoutClass l2 (Group l Window))
                results <- forM areas $ \(g, r') -> runLayout ws { W.layout = gLayout g
                                                                 , W.stack = gZipper g } r'
 
-               let hidden = map gLayout (W.integrate $ groups l) \\ map (gLayout . fst) areas
+               let hidden = map gLayout (W.integrate $ groups l) L.\\ map (gLayout . fst) areas
                hidden' <- mapM (flip handleMessage $ SomeMessage Hide) hidden
 
                let placements = concatMap fst results
@@ -887,15 +903,9 @@ moveToNewGroupDown :: ModifySpec
 moveToNewGroupDown _ Nothing = Nothing
 moveToNewGroupDown l0 (Just s) = _moveToNewGroup l0 s insertDownZ
 
-removeWindows wins (G l Nothing) = (G l Nothing)
-removeWindows wins (G l (Just (W.Stack f u d))) 
-    | not (f `elem` wins) = G l $ Just $ W.Stack f fu fd
-    | not (null fd) = G l $ Just $ W.Stack (head fd) fu (tail fd)
-    | not (null fu) = G l $ Just $ W.Stack (head fu) (tail fu) fd
-    | otherwise =  G l $ Nothing
-        where ft = filter (not . (`elem` wins))
-              fu = ft u
-              fd = ft d
+removeWindows wins (G l Nothing) = G l Nothing
+removeWindows wins (G l (Just s)) 
+    = G l $ W.filter (not . (`elem` wins)) s
 
 moveWindowsToNewGroup :: T.Direction1D -> (Maybe (W.Stack Window)) -> ModifySpec
 moveWindowsToNewGroup _ Nothing _ s = s
