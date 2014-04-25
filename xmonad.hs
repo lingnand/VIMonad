@@ -18,6 +18,7 @@ import Foreign.C.Types (CLong)
 import System.IO
 import System.Exit
 import System.Directory
+import System.Time
 import Text.Read
 import XMonad hiding (spawn)
 import XMonad.ManageHook
@@ -79,6 +80,7 @@ import XMonad.Util.Loggers
 import XMonad.Util.Font
 import XMonad.Util.WorkspaceCompare
 import XMonad.Hooks.InsertPosition
+import XMonad.Hooks.DebugKeyEvents
 import XMonad.Layout.ImageButtonDecoration
 import XMonad.Hooks.XPropManage
 import XMonad.Hooks.ICCCMFocus
@@ -87,6 +89,7 @@ import XMonad.Util.WorkspaceHandles
 import XMonad.Util.WorkspaceDirectories
 import XMonad.Actions.FloatKeys
 import Graphics.X11.Xlib.Extras
+import Graphics.X11.Xlib.Misc
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified XMonad.Layout.Groups as G
@@ -188,6 +191,17 @@ selectIcon' = [[1,1,1,1,1,1,1,1,1,1],
                [0,0,0,0,0,0,0,0,1,1],
                [0,0,0,0,0,0,0,0,0,1]]
 selectIcon = convertToBool selectIcon'
+visualIcon' = [[1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1],
+               [1,1,1,1,1,1,1,1,1,1]]
+visualIcon = convertToBool visualIcon'
 
 robotTheme = def { activeColor         = myBgHLight
                  , inactiveColor       = myBgDimLight
@@ -203,6 +217,7 @@ robotTheme = def { activeColor         = myBgHLight
                         tg <- fmap (maybe mySubTheme colorScheme) $ taskGroupOfWindow taskGroups w 
                         -- we will try to produce a number for each tab (easy for keyboard shortcut and referencing stuff)
                         selected <- windowIsSelected w
+                        selectionMode <- isInSelectionMode
                         -- read the tags for the given window
                         tags <- getTags w
                         let wta = case mgs of
@@ -212,9 +227,10 @@ robotTheme = def { activeColor         = myBgHLight
                                                                        (sm, tags) -> [("["++fromMaybe "" sm++(concatMap ("'"++) tags)++"] ", AlignLeft)]
                                                         _ -> []
                                         _ -> []
-                            icons = case selected of
-                                         True -> [(selectIcon, CenterRight 3)]
-                                         False -> []
+                            icons = case (selected, selectionMode) of
+                                         (True, False) -> [(selectIcon, CenterRight 3)]
+                                         (True, True) -> [(visualIcon, CenterRight 3)]
+                                         _ -> []
                         return $ Just $ tg {
                                   winTitleAddons = wta
                                 , winTitleIcons = icons
@@ -244,10 +260,16 @@ myXPConfig ref = def {
     , promptBorderWidth     = 0
     , height                = decoHeight myTabsTheme
     , historyFilter         = deleteConsecutive
-    , autoComplete       = Just 250000
+    , autoComplete       = Nothing
     , alwaysHighlight = False
     , searchPredicate = stdSearchPredicate
     , promptKeymap = myXPKeymap ref
+}
+
+myXPConfigWithQuitKey key r = (myXPConfig r) {
+    promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
+        (key, quit)
+    ]
 }
 
 myInfoXPConfig ref = (myXPConfig ref) {
@@ -257,7 +279,6 @@ myInfoXPConfig ref = (myXPConfig ref) {
     , bgColor = "#262729"
     , fgHLight = "#d6c3b6"
     , bgHLight = "#262729"
-    , autoComplete = Nothing
     , alwaysHighlight = False
 }
 
@@ -594,16 +615,13 @@ toggleWindowsSelection ls = do
     XS.put $ SelectedWindows $ case filter (`S.member` s) ls of
                                      [] -> foldr S.insert s ls
                                      _ -> foldr S.delete s ls 
-    windows id
-deleteWindowSelection w = deleteWindowsSelection [w]
 deleteWindowsSelection ls = do
     SelectedWindows s <- XS.get
     XS.put $ SelectedWindows $ foldr S.delete s ls
-    windows id
 markWindowsSelection ls = do
     SelectedWindows s <- XS.get
     XS.put $ SelectedWindows $ foldr S.insert s ls
-    windows id
+toggleCurrentWindowSelection = withFocused toggleWindowSelection
 
 -- the smallest units
 -- the window stack formed by the selection in the inner most group stack
@@ -614,7 +632,7 @@ applySelectedWindowStack :: Bool -> (Maybe (W.Stack Window) -> X ()) -> X ()
 applySelectedWindowStack reversal fun = do
     (s, b) <- getSelectedWindowStack'
     let rev (W.Stack f u d) = if reversal then W.Stack f d u else W.Stack f u d
-        deselect (W.Stack f [] []) = deleteWindowSelection f
+        deselect (W.Stack f [] []) = deleteWindowsSelection [f]
         deselect _ = return ()
     case s of
          Just os@(W.Stack f _ _) | b -> let wins = W.integrate os
@@ -631,7 +649,7 @@ applySelectedWindowStack reversal fun = do
                                  | otherwise -> let ss = rev os in deselect ss >> fun (Just ss)
          _ -> return ()
     -- refresh 
-    windows id
+    refresh
 
 -- to move a subgroup up or down
 -- 1. record all the windows to be moved later (this would almost certainly involve a break down in the tabbed layout, so we need the apply mod to fix it)
@@ -662,20 +680,21 @@ getSelectedWindowStack = fmap fst getSelectedWindowStack'
 
 windowIsSelected w = XS.get >>= \(SelectedWindows s) -> return $ S.member w s
 windowIsSelectedQuery = ask >>= liftX . windowIsSelected
-clearAllSelection = XS.put (SelectedWindows S.empty) >> windows id
+clearAllSelection = XS.put (SelectedWindows S.empty) >> refresh
 -- extended selection mode (this mode allows to select windows within the current group)
-data XMonadMode = Normal | Visual
+data XMonadMode = Normal | Visual deriving (Show, Read, Eq)
 data XMonadModeStorage = XMS XMonadMode deriving Typeable
 instance ExtensionClass XMonadModeStorage where
     initialValue = XMS Normal
 
-extendedSelectionChainCommand = do
-    spawn "xdotool key --clearmodifiers 'Super_L+control+x'"
+isInSelectionMode = XS.get >>= \(XMS m) -> return $ m == Visual
+ifInSelectionMode x y = isInSelectionMode >>= \b -> if b then x else y
+enterExtendedSelectionMode = XS.put (XMS Visual) >> refresh
+    -- runProcessWithInput "xdotool" ["key", "--clearmodifiers", "Super_L+x"] ""
+    -- feed a fake a keypress event to the event loop
     -- label the extended selection mode
-    XS.put $ XMS Visual
-    runLogHook
-exitExtendedSelectionMode = XS.put (XMS Normal) >> runLogHook
-extendedSelectionPrefix = "M-C-x"
+exitExtendedSelectionMode = XS.put (XMS Normal) >> refresh
+extendedSelectionPrefix = "M-x"
 getBaseCurrentStack :: X (Maybe (W.Stack Window))
 getBaseCurrentStack = G.getCurrentGStack >>= \mgs -> case mgs of
                                                           Just gs -> case G.baseCurrent gs of
@@ -854,7 +873,7 @@ printLayoutInfo = do
         autoIndicator = if isAuto then dzenColor myNotifyColor myBgColor "*" else "#"
         insertOlderIndicator = if t then dzenColor myNotifyColor myBgColor "|" else "<"
         modeIndicator = case mode of
-                             Visual -> dzenColor myNotifyColor myBgColor "X" 
+                             Visual -> dzenColor myNotifyColor myBgColor "V" 
                              _ -> "N"
     return $ Just $ lb++autoIndicator++insertOlderIndicator++modeIndicator++"-"++dzenColor c myBgColor plus++rb
 
@@ -1006,9 +1025,7 @@ myStatusBars = do
 ---------------- HandleEventHook -- {{{
 
 -- due to some reasons it appears that the startWSSwitchHook has some conflicts with the handleKeyEventForXMonadMode hook
-myHandleEventHook toggleFadeSet e = do
-    startWSSwitchHook e 
-    handleKeyEventForXMonadMode e
+myHandleEventHook = startWSSwitchHook <+> handleKeyEventForXMonadMode <+> debugKeyEvents
 
 -- }}}
 
@@ -1761,13 +1778,12 @@ divide p l = divide' p l ([],[])
 dynamicPrompt c = do
     cmds <- io getCommands
     home <- io $ env "HOME" "/home/lingnan"
-    hist <- fmap (fmap unescape . nub . sort) $ io $ historyCompletion ""
-    let absolute = filter (\s -> isPrefixOf "/" s || isPrefixOf "~/" s) hist
-        relative' = filter (\s -> isPrefixOf "./" s || isPrefixOf "../" s) hist
-    relative <- filterM (\f -> do
-            fe <- io $ doesFileExist f 
-            de <- io $ doesDirectoryExist f
-            return $ fe || de) relative'
+    hist <- fmap (fmap unescape . nub . sort . filter (\s -> isPrefixOf "/" s || isPrefixOf "~/" s)) $ io $ historyCompletion ""
+    --     relative' = filter (\s -> isPrefixOf "./" s || isPrefixOf "../" s) hist
+    -- relative <- filterM (\f -> do
+    --         fe <- io $ doesFileExist f 
+    --         de <- io $ doesDirectoryExist f
+    --         return $ fe || de) relative'
     -- to better fasd performace, we can first extract out all the values for the fasd components
     ------ let isd p = io (getFileStatus p >>= return . isDirectory) `catchX` (return False)
     ------ fasdl <- fmap lines $ runProcessWithInput (myScriptsDir++"/xfasd") [] ""
@@ -1775,7 +1791,8 @@ dynamicPrompt c = do
     -- let (fasdd', fasdf') = divide snd $ zip fasdl isds
     --     fasdd = fst $ unzip fasdd'
     --     fasdf = fst $ unzip fasdf'
-    dynamicPrompt' c cmds home (absolute++relative)
+    -- dynamicPrompt' c cmds home (absolute++relative)
+    dynamicPrompt' c cmds home hist
 
 dynamicPrompt' c cmds home hist = do
     d <- getCurrentWorkspaceDirectory
@@ -1857,12 +1874,6 @@ instance XPrompt VBPrompt where
 vbIsEqualToCompletion cmd cl = cmd == (last $ words cl)
 
 mkVBPrompt c = mkXPrompt VBPrompt c vbComplFunc vbAction
-vbPrompt = initMatches >>= \r -> mkVBPrompt (myXPConfig r) {
-  autoComplete = Nothing
-  , promptKeymap = M.fromList $ (M.toList (myXPKeymap r))++[
-  ((myModMask, xK_v), quit)
-  ]
-}
 
 -- }}}
 
@@ -1962,11 +1973,9 @@ handleKeyEventForXMonadMode (KeyEvent {ev_event_type = t, ev_state = m, ev_keyco
                 -- , ; . are excepted because they DO have meaning during a stack retrace
                 validKeysForRetraceAllTime = (myModMask, "period") : [(mk, k) | mk <- [myModMask, myModMask .|. shiftMask, myModMask .|. controlMask, myModMask .|. controlMask .|. shiftMask, myModMask .|. mod1Mask, myModMask .|. mod1Mask .|. controlMask], k <- [historyBackKey, historyForwardKey]]
                 validKeysForRetraceWhenJumpWindowSaved = [(myModMask, k) | k <- ["comma", "semicolon"]]
-            {-case mode of-}
             if (m, keyStr) `elem` (validKeysForRetraceAllTime ++ if jumpWindowSaved then validKeysForRetraceWhenJumpWindowSaved else []) 
                    then return ()
                    else clearAllMarks
-                 {-_       -> return ()-}
         return (All True)
 handleKeyEventForXMonadMode _ = return (All True)
 
@@ -2419,8 +2428,31 @@ typeables = typeablesWithoutAlphas++alphas
 alphas = ['a'..'z']++['A'..'Z']
 typeablesWithoutAlphas = ['0'..'9']++"!@#$%^&*()-_=+\\|`~[{]}'\",<.>?"
 typeablesNoSlashNorQuote = filter (\c -> c /='/' && c /='\'') typeables
+typeableKeyStrokes = fmap charToKeyStroke typeables
 
-charToKeyStroke c = if isUpper c then "S-"++[toLower c] else [c]
+charToKeyStroke c = if isUpper c then "S-"++[toLower c]
+                                 else case c of
+                                           '!' -> "S-1"
+                                           '@' -> "S-2"
+                                           '#' -> "S-3"
+                                           '$' -> "S-4"
+                                           '%' -> "S-5"
+                                           '^' -> "S-6"
+                                           '&' -> "S-7"
+                                           '*' -> "S-8"
+                                           '(' -> "S-9"
+                                           ')' -> "S-0"
+                                           '_' -> "S--"
+                                           '+' -> "S-="
+                                           '|' -> "S-\\"
+                                           '~' -> "S-`"
+                                           '{' -> "S-["
+                                           '}' -> "S-]"
+                                           '"' -> "S-'"
+                                           '<' -> "S-,"
+                                           '>' -> "S-."
+                                           '?' -> "S-/"
+                                           _ -> [c]
 
 shiftWindowsHere [] = return ()
 shiftWindowsHere ls = withFocused $ \f ->
@@ -2439,45 +2471,117 @@ shiftWindowsHereAndFocusLast wins f = do
 
 hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 
+-- entering the extended selection mode will change a few things
+---- any one the following triggers the selection mode 
+
+---- m-f <symbol> selects the current window to the given window tab symbol (navigating there)
+---- m-f s-4 selects until the end
+
+---- m-x <symbol> selects the given task group
+---- m-x ' <symbol> selects the windows with the given mark within the current group
+---- m-s-' <symbol> moves the group here and then marks them
+---- m-s-[ <symbol> moves the group here and then marks them
+---- m-v 
+---- m-x <symbol> selects the tab no
+---- m-x m-p selects the current tab and the one before, navigating to it as well
+---- m-x m-n selects the current tab and the one next, while navigating there
+---- m-s-x selects all tabs
+
+------- inside the selection mode you can
+------- m-<symbol> selects the tab for the given tab no 
+------- m-[ <symbol> selects the given group of windows
+------- m-' <symbol> selects the given marked window group
+------- m-p and m-n now selects everything inbetween: m-n selects the current window and goes to the next one; while m-p goes to the previous window and then selects it
+------- other keys listed above still applies
+------- any other key executes that function and invalidates the visual mode (e.g. m1-<symbol>)
+
+focusNextTab = sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusDown
+focusPreviousTab = sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusUp
+selectTab n = do
+     ls <- getBaseCurrentWindows
+     if n < length ls then toggleWindowSelection $ ls !! n
+                      else return ()
+selectTaskGroup g = getBaseCurrentWindows >>= filterM (runQuery (filterPredicate g)) >>= toggleWindowsSelection
+selectTagGroupForChar t = getBaseCurrentWindows >>= filterM (runQuery (hasTagQuery [t])) >>= toggleWindowsSelection
+
 myKeys toggleFadeSet = 
-    ----- dup key-- {{{
-    -- mountDupKeys
-    -- [
-    --   ("M1-C-0", "M1-C-1")
-    -- ] 
-    -- $
-    -- }}}
-    ----- extended selection interface:: any command outside the first block of definition executes that command and revokes the extended selection
     -- extended selection for tab no
-    [ (extendedSelectionPrefix++" <Esc>", exitExtendedSelectionMode)]
+    [ ("M-x M-p", toggleCurrentWindowSelection >> enterExtendedSelectionMode)
+    , ("M-x M-n", toggleCurrentWindowSelection >> focusNextTab >> enterExtendedSelectionMode)
+    , ("M-S-x", getBaseCurrentWindows >>= toggleWindowsSelection >> enterExtendedSelectionMode)
+    ]
+    -- extended selection for tab numbers
     ++
-    [ (extendedSelectionPrefix++" "++(fromJust $ subgroupIndexToSymbol n), do
-         extendedSelectionChainCommand
-         ls <- getBaseCurrentWindows
-         if n < length ls then toggleWindowSelection $ ls !! n
-                          else return ()
+    [ ("M-x "++mf++(fromJust $ subgroupIndexToSymbol n), selectTab n >> enterExtendedSelectionMode)
+    | n <- [0..(length subgroupSymbolSequence - 1)]
+    , mf <- ["", "M-"]]
+    -- find mode:
+    ++
+    [ ("M-f "++mf++(fromJust $ subgroupIndexToSymbol n), do
+         ms <- getBaseCurrentStack
+         case ms of
+              Just (W.Stack f u d) -> let (g, ff) = if n >= ci then (init (f : fw), last (f : fw))
+                                                               else (bw, last $ f : bw)
+                                          ci = length u 
+                                          (fw, mfw) = splitAt (min (n - ci) (length d)) d
+                                          (bw, _) = splitAt (min (ci - n) (length u)) u in do
+                                         toggleWindowsSelection g
+                                         focus ff
+                                         enterExtendedSelectionMode
+              _ -> return ()
        )
     | n <- [0..(length subgroupSymbolSequence - 1)]
-    ]
+    , mf <- ["", "M-"]]
+    ++
+    [("M-f "++mf++"S-4", do
+        ms <- getBaseCurrentStack
+        case ms of
+             Just (W.Stack f u d) -> let g = f:d in do
+                 toggleWindowsSelection g
+                 -- we need to move the selection forward (so that to be fully compatible with the m-p m-n interface) 
+                 if not (null u) then focus $ last u
+                                 else return ()
+                 enterExtendedSelectionMode
+             _ -> return ())
+     | mf <- ["", "M-"]]
     -- extended selection for task groups
     ++
-    [ (extendedSelectionPrefix++" "++(filterKey g), extendedSelectionChainCommand >> getBaseCurrentWindows >>= filterM (runQuery (filterPredicate g)) >>= toggleWindowsSelection)
+    [ ("M-x "++(filterKey g), selectTaskGroup g >> enterExtendedSelectionMode)
     | g <- allTaskGroupsWithFilterKey []
     ]
     -- extended selection for tagged windows
     ++
-    [ (extendedSelectionPrefix++" ' "++charToKeyStroke t, extendedSelectionChainCommand >> getBaseCurrentWindows >>= filterM (runQuery (hasTagQuery [t])) >>= toggleWindowsSelection)
-    | t <- typeablesNoSlashNorQuote
-    ]
+    [ ("M-x ' "++charToKeyStroke t, selectTagGroupForChar t >> enterExtendedSelectionMode)
+    | t <- typeablesNoSlashNorQuote]
     ++
-    appendMap (\(k, a) -> (extendedSelectionPrefix++" "++k, a >> exitExtendedSelectionMode))
-    
+    -- adding in the keybindings for the extended selection mode
+    fmap (\(k, a) -> 
+        -- first filter all the keys that are going to be 
+        let syms = zip [0..] subgroupSymbolSequence 
+            tkgs = allTaskGroupsWithFilterKey []
+            tags = zip typeablesNoSlashNorQuote $ fmap charToKeyStroke typeablesNoSlashNorQuote in
+        case ( find ((\s -> "M-"++[s] == k) . snd) syms 
+             , find ((\fk -> "M-[ "++fk == k || "M-] "++fk == k) . filterKey) tkgs
+             , find ((\t -> "M-' "++t == k) . snd) tags
+             ) of
+             (Just (ind, _), _, _) -> (k, flip ifInSelectionMode a $ selectTab ind >> refresh)
+             (_, Just g, _) -> (k, flip ifInSelectionMode a $ selectTaskGroup g >> refresh)
+             (_, _, Just (tc, _)) -> (k, flip ifInSelectionMode a $ selectTagGroupForChar tc >> refresh)
+             _ | k == "M-p" -> (k, flip ifInSelectionMode a $ focusPreviousTab >> toggleCurrentWindowSelection >> refresh)
+               | k == "M-n" -> (k, flip ifInSelectionMode a $ toggleCurrentWindowSelection >> focusNextTab)
+               | k == "M-<Esc>" -> (k, flip ifInSelectionMode a exitExtendedSelectionMode)
+               -- hack here to allow these keys to toggle on the extendselectedmode
+               | k `elem` ["M-v", "M-S-v", "M-C-S-u"] -> (k, a)
+               | "M-S-[ " `isPrefixOf` k -> (k, a)
+               | "M-S-] " `isPrefixOf` k -> (k, a)
+               | "M-S-' " `isPrefixOf` k -> (k, a)
+               | otherwise -> (k, a >> exitExtendedSelectionMode))
     ----- Repeat-- {{{
     (appendActionWithException saveLastCommand [ ("M-.", getLastCommand >>= id) ] 
     -- }}}
     ----- wallpaper invoke -- {{{
     ([ 
-      ("M-C-<Return>", initMatches >>= \r -> mkWPPrompt toggleFadeSet (myXPConfig r) {
+      ("M-C-<Return>", initMatches >>= \r -> mkWPPrompt toggleFadeSet (myXPConfigWithQuitKey (myModMask .|. controlMask, xK_Return) r) {
               autoComplete = Just 0
             , searchPredicate = repeatedGrep
        })
@@ -2543,6 +2647,7 @@ myKeys toggleFadeSet =
                             let rws = if dir == Prev then reverse ws else ws
                             markWindowsSelection rws
                             shiftWindowsHere rws
+                            enterExtendedSelectionMode
       )
     | (dc, dir) <- [("[", Prev), ("]", Next)]
     , g <- allTaskGroupsWithFilterKey ["M-S-[", "M-S-]"] ]
@@ -2617,19 +2722,16 @@ myKeys toggleFadeSet =
     -- }}}
     ----- Prompts-- {{{
     -- bind change mode to some key that would never be used
-    , ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfig r) { changeModeKey = xK_VoidSymbol, autoComplete = Nothing, searchPredicate = repeatedGrep })
-    , ("M-b", vbPrompt)
+    , ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfigWithQuitKey (myModMask, xK_r) r) { changeModeKey = xK_VoidSymbol, searchPredicate = repeatedGrep })
+    , ("M-b", initMatches >>= mkVBPrompt . myXPConfigWithQuitKey (myModMask, xK_b))
     -- xmonad commands
-    , ("M-C-,", initMatches >>= \r -> xmonadPrompt (myXPConfig r) {autoComplete = Nothing})
+    , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
     -- tag windows
     , ("M-u", getSelectedWindowStack >>= mapM_ unTag . W.integrate')
     ]
     -- search interface
     ++
-    [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) { 
-                                                searchPredicate = repeatedGrep
-                                              , autoComplete = Nothing
-                                            } p validWindow a)
+    [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow a)
     | (mf, p, a) <- [ ("", "Go to window: ", deminimizeFocus)
                     , ("S-", "Bring window: ", shiftWindowsHere . wrapList)
                     , ("C-", "Delete window: ", focusNextKillWindow)
@@ -2656,6 +2758,7 @@ myKeys toggleFadeSet =
         , ("S-'", \t -> orderedWindowsMatchingPredicate (hasTagQuery t) >>= \ws -> do
                                 markWindowsSelection ws
                                 shiftWindowsHere ws
+                                enterExtendedSelectionMode
           )
         , ("C-'", \t -> orderedWindowsMatchingPredicate (hasTagQuery t) >>= focusNextKillWindows)
         ] 
@@ -2667,16 +2770,10 @@ myKeys toggleFadeSet =
     [ ("M-S-' "++k, withNextMatchOrDo History (return True) (\w -> shiftWindowsHere [w]) (return ())) | k <- ["M-S-'", "'"]]
     ++
     [ -- launcher
-      ("M-z", initMatches >>= \r -> mkTaskPrompt (myXPConfig r) {
-            autoComplete = Nothing
-            , promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
-                ((myModMask, xK_z), quit)
-            ]})
-    , ("M-y", initMatches >>= \r -> mkFMCPrompt (myXPConfig r) {
+      ("M-z", initMatches >>= mkTaskPrompt . myXPConfigWithQuitKey (myModMask, xK_z))
+    , ("M-y", initMatches >>= \r -> mkFMCPrompt (myXPConfigWithQuitKey (myModMask, xK_y) r) {
             autoComplete = Just 0
-            , promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
-                ((myModMask, xK_y), quit)
-            ]})
+      })
     -- }}}
     ----- Layout hotkeys-- {{{
     -- Layoutgroups
@@ -2757,8 +2854,8 @@ myKeys toggleFadeSet =
     , ("M-h", sendMessage $ G.Modify G.focusGroupUp)
     , ("M-l", sendMessage $ G.Modify G.focusGroupDown)
 
-    , ("M-p", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusUp)
-    , ("M-n", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusDown)
+    , ("M-p", focusPreviousTab)
+    , ("M-n", focusNextTab)
     -- simplifying the process by not providing keys for shifting a tab page to adjacent columns
     -- since by user convention it doesn't seem like a thing that I tend to use
     , ("M-S-p", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapUp)
@@ -2793,19 +2890,12 @@ myKeys toggleFadeSet =
     , ("M-q", getSelectedWindowStack >>= focusNextKillWindows . W.integrate')
     , ("M-S-q", getBaseCurrentWindows >>= focusNextKillWindows)
     , ("M-C-q", G.getCurrentGStack >>= maybe (return ()) (focusNextKillWindows . maybe [] G.flattened . G.current))
-    -- sort is not really stable now as it might break the tab rendering
-    -- , ("M-s", sortGroupStacks taskGroups >> runLogHook)
-    , ("M-x", withFocused $ \f -> do
-                    toggleWindowSelection f
-                    sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusDown)
-    -- with s-x we select all the tabs within a group
-    , ("M-S-x", getBaseCurrentWindows >>= toggleWindowsSelection)
     ]
     ++
     [
-      ("M-v", orderedWindowsMatchingPredicate (isInCurrentWorkspace <&&> windowIsSelectedQuery) >>= shiftWindowsHere)
+      ("M-v", orderedWindowsMatchingPredicate (isInCurrentWorkspace <&&> windowIsSelectedQuery) >>= shiftWindowsHere >> enterExtendedSelectionMode)
     -- move all selected windows (in all workspaces
-    , ("M-S-v", orderedWindowsMatchingPredicate windowIsSelectedQuery >>= shiftWindowsHere)
+    , ("M-S-v", orderedWindowsMatchingPredicate windowIsSelectedQuery >>= shiftWindowsHere >> enterExtendedSelectionMode)
     , ("M-s", sortWindowsWithinGroupStacks)
     -- a permanent sticky layout that will automatically move any new window into the corresponding task group
     , ("M-S-s", do
@@ -2832,7 +2922,7 @@ myKeys toggleFadeSet =
     {-, ("M-C-.", sendMessage $ G.ToEnclosing $ SomeMessage $ IncMasterN (-1))-}
     , ("M-C-m", getSelectedWindowStack >>= minimizeWindows . W.integrate')
     , ("M-C-u", restoreMinimizedWindowAndSelect)
-    , ("M-C-S-u", restoreMinimizedWindowsAndSelect)
+    , ("M-C-S-u", restoreMinimizedWindowsAndSelect >> enterExtendedSelectionMode)
     , ("M-<Tab>", switchFocusFloat)
     , ("M-S-<Tab>", switchFocusFloat)
     -- }}}
@@ -2840,7 +2930,7 @@ myKeys toggleFadeSet =
     -- for Dynamic Workspaces
     {-, ("M-<Backspace>", clearWorkspacesAfter >> return ())-}
     , ("M-C-S-q", removeCurrentWorkspace)
-    , ("M-a c", initMatches >>= \r -> renameWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing})
+    , ("M-a c", initMatches >>= \r -> renameWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep})
     ]
     ++
     [ ("M-"++mf++"a "++af, initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos action)
@@ -2888,12 +2978,12 @@ myKeys toggleFadeSet =
 ----- QuickFindWindow-- {{{
     -- zip through all the possible combinations of keys
     -- finding the title of a window (a bit triky)
-    ++
-    [ ("M-"++m++"f "++k, cycleInCurrWSOfPropMatchingPrefix Next p c casesens)
-    | (m, p, casesens) <- zip3 ["", "S-"] [title, className] [True, False]
-    , (k, c) <- fmap (\c -> ([c], c)) ['a'..'z'] 
-                ++
-                fmap (\c -> ("S-"++[c], toUpper c)) ['a'..'z']]
+    -- ++
+    -- [ ("M-"++m++"f "++k, cycleInCurrWSOfPropMatchingPrefix Next p c casesens)
+    -- | (m, p, casesens) <- zip3 ["", "S-"] [title, className] [True, False]
+    -- , (k, c) <- fmap (\c -> ([c], c)) ['a'..'z'] 
+    --             ++
+    --             fmap (\c -> ("S-"++[c], toUpper c)) ['a'..'z']]
     ++
     [ ("M-;", playLastFindFunction Next)
     , ("M-,", playLastFindFunction Prev)]))
@@ -2904,25 +2994,27 @@ myKeys toggleFadeSet =
               
 -- }}}
 
----------------- Main -- {{{
-main = do
-    toggleFadeSet <- newIORef S.empty
-    dzenLogBar <- myStatusBars
-    -- urgencyhook is not used currently due to conflict with the wallpaper system
-    xmonad $ ewmh $ U.withUrgencyHook U.NoUrgencyHook $ defaultConfig { 
-    {-xmonad $ ewmh $ defaultConfig { -}
+myXMonadConfig = defaultConfig { 
         manageHook = myManageHook 
         , terminal = myTerminal
         , workspaces = [scratchpadWorkspaceTag, tmpWorkspaceTag]
         , startupHook = myStartupHook
         , modMask = myModMask
         , layoutHook = myLayout
-        , logHook = myLogHook toggleFadeSet dzenLogBar 
-        , handleEventHook = myHandleEventHook toggleFadeSet
         , focusFollowsMouse = False
         , borderWidth = 2
         , normalBorderColor = myBgColor
         , focusedBorderColor = color6
+        , handleEventHook = myHandleEventHook
+        }
+
+---------------- Main -- {{{
+main = do
+    toggleFadeSet <- newIORef S.empty
+    dzenLogBar <- myStatusBars
+    -- urgencyhook is not used currently due to conflict with the wallpaper system
+    xmonad $ ewmh $ U.withUrgencyHook U.NoUrgencyHook $ myXMonadConfig {
+            logHook = myLogHook toggleFadeSet dzenLogBar 
         } `additionalKeysP` myKeys toggleFadeSet
 
 -- }}}
