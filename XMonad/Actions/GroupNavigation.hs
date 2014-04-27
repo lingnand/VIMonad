@@ -27,6 +27,7 @@ module XMonad.Actions.GroupNavigation ( -- * Usage
                                       , nextMatchOrDo
                                       , withNextMatchOrDo
                                       , nextMatchWithThis
+                                      , nextMatched
                                       , historyHook
                                       ) where
 
@@ -117,6 +118,8 @@ nextMatchOrDo dir qry act = orderedWindowList dir
 withNextMatchOrDo :: Direction -> Query Bool -> (Window -> X()) -> X () -> X ()
 withNextMatchOrDo dir qry mf f = orderedWindowList dir
                             >>= onNextMatchOrDo qry mf f
+nextMatched :: Direction -> Query Bool -> X (Maybe Window)
+nextMatched dir qry = orderedWindowList dir >>= findM (runQuery qry)
 
 -- Produces the action to perform depending on whether there's a
 -- matching window

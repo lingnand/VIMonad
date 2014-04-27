@@ -19,7 +19,7 @@ module XMonad.Layout.Minimize (
         -- $usage
         minimize,
         minimizeWindow,
-        MinimizeMsg(RestoreMinimizedWin,RestoreNextMinimizedWin),
+        MinimizeMsg(RestoreMinimizedWin,RestoreNextMinimizedWin,MinimizeWin),
         Minimize,
         getMinimizedWindows,
         getCurrentMinimizedWindows

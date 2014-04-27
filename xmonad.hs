@@ -217,7 +217,7 @@ robotTheme = def { activeColor         = myBgHLight
                         tg <- fmap (maybe mySubTheme colorScheme) $ taskGroupOfWindow taskGroups w 
                         -- we will try to produce a number for each tab (easy for keyboard shortcut and referencing stuff)
                         selected <- windowIsSelected w
-                        selectionMode <- isInSelectionMode
+                        inv <- isInVisualMode
                         -- read the tags for the given window
                         tags <- getTags w
                         let wta = case mgs of
@@ -227,9 +227,9 @@ robotTheme = def { activeColor         = myBgHLight
                                                                        (sm, tags) -> [("["++fromMaybe "" sm++(concatMap ("'"++) tags)++"] ", AlignLeft)]
                                                         _ -> []
                                         _ -> []
-                            icons = case (selected, selectionMode) of
-                                         (True, False) -> [(selectIcon, CenterRight 3)]
+                            icons = case (selected, inv) of
                                          (True, True) -> [(visualIcon, CenterRight 3)]
+                                         (True, False) -> [(selectIcon, CenterRight 3)]
                                          _ -> []
                         return $ Just $ tg {
                                   winTitleAddons = wta
@@ -483,21 +483,25 @@ myLayout = minimize . noBorders . avoidStruts $ lessBorders Screen rectTabs
 
 -- corrected focus function that unminimize the given window
 deminimizeFocus w = deminimize w >> focus w
-deminimize w = do
+deminimize w = routeMessageToWS ((w `elem`) . W.integrate' . W.stack) (RestoreMinimizedWin w)
+routeMessageToWS fun mess = do
     wss <- allWorkspaces
     curr <- gets (W.currentTag . windowset)
-    case find ((w `elem`) . W.integrate' . W.stack) wss of
+    case find fun wss of
          Just ws
-            | W.tag ws /= curr -> sendMessageWithNoRefresh (RestoreMinimizedWin w) ws 
-            | otherwise -> sendMessage (RestoreMinimizedWin w)
+            | W.tag ws /= curr -> sendMessageWithNoRefresh mess ws 
+            | otherwise -> sendMessage mess
          _ -> return ()
+minimizeWindows ls = deleteWindowsSelection ls >> correctFocus (mapM_ minimizeWindow) ls
+minimizeWindows' tag ls = do
+    correctFocus (mapM_ (\w -> routeMessageToWS ((==tag).W.tag) (MinimizeWin w))) ls
+    -- clear the focus if necessary
 
 restoreMinimizedWindowsAndSelect' [] = return ()
 restoreMinimizedWindowsAndSelect' wins = markWindowsSelection wins >> mapM_ deminimizeFocus wins 
 restoreMinimizedWindowsAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect'
 restoreMinimizedWindowAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect' . wrapList . head
 
-minimizeWindows ls = deleteWindowsSelection ls >> correctFocus (mapM_ minimizeWindow) ls
 
 isMinimized = ask >>= \w -> liftX $ do
     wss <- allWorkspaces
@@ -603,105 +607,31 @@ fetchTabNo' w [] = Nothing
 fetchTabNo w (G.Node s) = fetchTabNo' w $ W.integrate s
 fetchTabNo w (G.Leaf ms) = elemIndex w $ W.integrate' ms
 
--- select windows (for movement, etc')
-data SelectedWindows = SelectedWindows (S.Set Window) deriving (Typeable, Show, Read)
-instance ExtensionClass SelectedWindows where
-    initialValue = SelectedWindows S.empty
-    extensionType = PersistentExtension
-
-toggleWindowSelection w = toggleWindowsSelection [w]
-toggleWindowsSelection ls = do
-    SelectedWindows s <- XS.get
-    XS.put $ SelectedWindows $ case filter (`S.member` s) ls of
-                                     [] -> foldr S.insert s ls
-                                     _ -> foldr S.delete s ls 
-deleteWindowsSelection ls = do
-    SelectedWindows s <- XS.get
-    XS.put $ SelectedWindows $ foldr S.delete s ls
-markWindowsSelection ls = do
-    SelectedWindows s <- XS.get
-    XS.put $ SelectedWindows $ foldr S.insert s ls
-toggleCurrentWindowSelection = withFocused toggleWindowSelection
-
--- the smallest units
--- the window stack formed by the selection in the inner most group stack
--- the stack window is the thing to be applied, where the maybe window denotes if there's any window that has to be moved at the end of the operation (only when the current group would go from more than one tabs to zero tabs)
--- the first argument determines whether the selection should be reversed (mirrored); this is necessary when you are using a mirrored layout
--- default to clearing the particular selection if there is only one selected during the operation
-applySelectedWindowStack :: Bool -> (Maybe (W.Stack Window) -> X ()) -> X ()
-applySelectedWindowStack reversal fun = do
-    (s, b) <- getSelectedWindowStack'
-    let rev (W.Stack f u d) = if reversal then W.Stack f d u else W.Stack f u d
-        deselect (W.Stack f [] []) = deleteWindowsSelection [f]
-        deselect _ = return ()
-    case s of
-         Just os@(W.Stack f _ _) | b -> let wins = W.integrate os
-                                            inws = init wins
-                                            lw = last wins
-                                        in do
-                                           -- temporarily move those windows to the scratchpad wokr
-                                           -- we should keep the last item in the stack because that would make sure we are in the right order
-                                           curr <- gets (W.currentTag . windowset)
-                                           windows $ \s -> W.focusWindow lw $ foldr (W.shiftWin scratchpadWorkspaceTag) s inws
-                                           fun $ Just $ W.Stack lw [] [] 
-                                           -- moving the windows back and focusing on the right element
-                                           windows $ \s -> W.focusWindow f $ foldr (W.shiftWin curr) s inws
-                                 | otherwise -> let ss = rev os in deselect ss >> fun (Just ss)
-         _ -> return ()
-    -- refresh 
-    refresh
-
--- to move a subgroup up or down
--- 1. record all the windows to be moved later (this would almost certainly involve a break down in the tabbed layout, so we need the apply mod to fix it)
--- 2. focus up or down in the BIGGER group layout
--- 3. apply the moveWindowsToNewGroupUp with the windows recorded previously
-
-getSelectedWindowStack' = do
-    mf <- gets (W.peek . windowset)
-    case mf of
-         Just focus -> runQuery isFloating focus >>= \b -> case b of
-                                 True -> return (Just $ W.Stack focus [] [], False)
-                                 False -> do
-                                    SelectedWindows s <- XS.get
-                                    mbs <- getBaseCurrentStack
-                                    let ft = filter (`S.member` s)
-                                    case mbs of
-                                         Just os@(W.Stack f u d) | S.member f s -> if length fu == length u && length fd == length d && length fu + length fd > 0 
-                                                                                   then return (Just os, True)
-                                                                                   else return (Just (W.Stack f fu fd), False)
-                                                                 | not (null fd) -> return (Just $ W.Stack (head fd) fu (tail fd), False)
-                                                                 | not (null fu) -> return (Just $ W.Stack (head fu) (tail fu) [], False)
-                                                                 | otherwise -> return (Just $ W.Stack f [] [], False)
-                                                                      where fu = ft u
-                                                                            fd = ft d
-                                         _ -> return (Nothing, False) 
-         _ -> return (Nothing, False)
-getSelectedWindowStack = fmap fst getSelectedWindowStack'
-
-windowIsSelected w = XS.get >>= \(SelectedWindows s) -> return $ S.member w s
-windowIsSelectedQuery = ask >>= liftX . windowIsSelected
-clearAllSelection = XS.put (SelectedWindows S.empty) >> refresh
--- extended selection mode (this mode allows to select windows within the current group)
-data XMonadMode = Normal | Visual deriving (Show, Read, Eq)
-data XMonadModeStorage = XMS XMonadMode deriving Typeable
-instance ExtensionClass XMonadModeStorage where
-    initialValue = XMS Normal
-
-isInSelectionMode = XS.get >>= \(XMS m) -> return $ m == Visual
-ifInSelectionMode x y = isInSelectionMode >>= \b -> if b then x else y
-enterExtendedSelectionMode = XS.put (XMS Visual) >> refresh
-    -- runProcessWithInput "xdotool" ["key", "--clearmodifiers", "Super_L+x"] ""
-    -- feed a fake a keypress event to the event loop
-    -- label the extended selection mode
-exitExtendedSelectionMode = XS.put (XMS Normal) >> refresh
-extendedSelectionPrefix = "M-x"
 getBaseCurrentStack :: X (Maybe (W.Stack Window))
-getBaseCurrentStack = G.getCurrentGStack >>= \mgs -> case mgs of
-                                                          Just gs -> case G.baseCurrent gs of
-                                                                          G.Leaf s -> return s
-                                                                          _ -> return Nothing
-                                                          _ -> return Nothing
+getBaseCurrentStack = do
+    ins <- focusIsInGStack
+    mgs <- G.getCurrentGStack 
+    case (ins, mgs) of
+        (True, Just gs) -> return $ G.toZipper $ G.baseCurrent gs
+        _ -> return Nothing
+
+focusIsInGStack = gets (W.peek . windowset) >>= maybe (return False) (fmap not . runQuery isFloating)
 getBaseCurrentWindows = getBaseCurrentStack >>= return . W.integrate'
+-- the focused stack is the base current stack, unless the current focus is on a floating window, in that case it is the stack formed by that floating group
+getFocusStack = do
+    mbs <- getBaseCurrentStack
+    mf <- gets (W.peek . windowset)
+    (_, _, _, _, float, _, _) <- getSides
+    case (mbs, mf, break ((==mf) . Just) float) of
+         (Just (W.Stack sfw u d), Just fw, _) | sfw == fw -> return mbs
+         (_, _, (fl,f:fr)) -> return $ Just $ W.Stack f (reverse fl) fr
+         _ -> return Nothing
+
+-- the selection stack should be 
+-- 1. the actively selected elements, if any  
+-- 2. the passively selected elements in the basecurrent group, if any
+-- 3. the current window
+-- note that when the focus is on a float window it would always be case 3
 
 
 -- should we only sort the current focused group? But on the other hand the
@@ -850,7 +780,11 @@ doNotFadeOutWindows =  className =? "xine" <||> className =? "MPlayer"
 -- tests if a window should be faded; floats are the windows that have been toggled by the user to not fade
 defaultFadeTest floats =
     -- liftM not doNotFadeOutWindows <&&> isUnfocused <&&> disableFadingWithinClassNames <&&> (join . asks $ \w -> liftX . io $ S.notMember w `fmap` readIORef floats)
-    liftM not doNotFadeOutWindows <&&> isUnfocused <&&> (join . asks $ \w -> liftX . io $ S.notMember w `fmap` readIORef floats)
+    liftM not doNotFadeOutWindows <&&> fmap not isFocused <&&> (join . asks $ \w -> liftX . io $ S.notMember w `fmap` readIORef floats)
+
+isFocused = ask >>= \w -> liftX $ do
+    mf <- gets (W.peek . windowset)
+    return $ mf == Just w
      
 -- toggles whether the given window should be faded out (by toggling its reference in a set
 toggleFadeOut :: Window -> S.Set Window -> S.Set Window
@@ -873,8 +807,10 @@ printLayoutInfo = do
         autoIndicator = if isAuto then dzenColor myNotifyColor myBgColor "*" else "#"
         insertOlderIndicator = if t then dzenColor myNotifyColor myBgColor "|" else "<"
         modeIndicator = case mode of
-                             Visual -> dzenColor myNotifyColor myBgColor "V" 
-                             _ -> "N"
+                             Visual Win -> dzenColor myNotifyColor myBgColor "VW" 
+                             Visual Row -> dzenColor myNotifyColor myBgColor "VR" 
+                             Visual Col -> dzenColor myNotifyColor myBgColor "VC" 
+                             _ -> "Nm"
     return $ Just $ lb++autoIndicator++insertOlderIndicator++modeIndicator++"-"++dzenColor c myBgColor plus++rb
 
 -- pretty printing for groupNames
@@ -1346,12 +1282,15 @@ renameWorkspacePrompt conf = workspacePrompt conf "Rename workspace" (\t n -> se
 
 wrapList c = [c]
 
-removeCurrentWorkspace = do
+removeCurrentWorkspace = removeCurrentWorkspace' ""
+removeCurrentWorkspace' reg = do
     -- remove all window selectinos
     -- remove all the hiden windows as well
     curr <- gets (W.currentTag . windowset)
     (l, r, gf, ml, float, _, _) <- getSides
-    focusNextKillWindows $ float ++ l ++ gf ++ r ++ ml
+    -- move all the windows to the tmpworkspace
+    let winsToKill = float ++ l ++ gf ++ r ++ ml
+    minimizeWindows' tmpWorkspaceTag winsToKill
     -- our methodology is simple, remove the current workspace and reorder the symbol stream for the tags
     -- so this involves repairing the tags with the associated handles
     -- we can savely remove the workspace if all the workspaces after this workspace are empty
@@ -1501,20 +1440,6 @@ getWPChannel = do
 getWPDirectory = getWPChannel >>= \c -> return $ wallpaperDirectory ++ c
 
 
--- wallpaperToggle is designed to toggle the window opacity and STAYS
--- the hook tries to execute the command (presumably related to changing the wallpaper) and fade ALL windows for wallpaper to shine through if they are not already faded
-wallpaperChangeFadeFullHook cmd = do
-        spawn cmd
-        -- fadeOutLogHook $ fadeIf (return True) wallpaperFadeFullAmount
-        -- XS.put $ WallPaperToggleState True
-
--- toggle the wallpaper toggle state; toggle the wallpaper gallery mode
-wallpaperToggleHook toggleFadeSet = return ()
-        -- WallPaperToggleState ts <- XS.get
-        -- XS.put $ WallPaperToggleState $ not ts
-        -- fadeOutLogHook $ if ts then fadeIf (defaultFadeTest toggleFadeSet) defaultFadeInactiveAmount else fadeIf (return True) wallpaperFadeFullAmount
--- }}}
-
 ---------------- Start workspace transition timer -- {{{
 -- due to some weird reasons the dzen bar refuses to be detected by the avoidStruts at startup. Resolution: switch to the right workspace after some delay (assuming that dzen has started up by that time
 
@@ -1623,7 +1548,10 @@ findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) 
 dynamicPromptWidgets = [
         -- this follow the (prefix, prompt) format
         dwgt VBPrompt "vb" (\c -> vbComplFunc) vbAction
-      , dwgt defaultSDMode "sdcv" (\c -> completionFunction defaultSDMode) (flip (modeAction defaultSDMode) "")
+      , dwgt defaultSDMode "sdcv-Collins" (\c -> completionFunction defaultSDMode) (flip (modeAction defaultSDMode) "")
+      , dwgt mobySDMode "sdcv-Moby" (\c -> completionFunction mobySDMode) (flip (modeAction mobySDMode) "")
+      , dwgt modernCHSDMode "sdcv-modernChinese" (\c -> completionFunction modernCHSDMode) (flip (modeAction modernCHSDMode) "")
+      , dwgt bigCHSDMode "sdcv-bigChinese" (\c -> completionFunction bigCHSDMode) (flip (modeAction bigCHSDMode) "")
       , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction
       , dwgt FMCPrompt "fmc" (\c -> fmcComplFunc) fmcAction
       , dwgt CalcMode "calc" (\c -> completionFunction CalcMode) (flip (modeAction CalcMode) "")
@@ -1840,13 +1768,13 @@ instance XPrompt StarDictMode where
     highlightPredicate _ _ _ = False
 mkSDMode p d = XPT $ SDMode p d
 defaultSDMode = SDMode "Collins Cobuild 5 > " "Collins Cobuild 5"
-defaultEngDictModes = [XPT $ defaultSDMode, mkSDMode  "Moby Thesaurus II > " "Moby Thesaurus II"]
-defaultChDictModes = [mkSDMode "现代汉语词典 > " "Modern Chinese Dictionary", mkSDMode  "汉语大词典 > " "Chinese Big Dictionary"]
+mobySDMode = SDMode  "Moby Thesaurus II > " "Moby Thesaurus II"
+modernCHSDMode = SDMode "现代汉语词典 > " "Modern Chinese Dictionary"
+bigCHSDMode = SDMode "汉语大词典 > " "Chinese Big Dictionary"
+defaultEngDictModes = [XPT $ defaultSDMode, XPT $ mobySDMode]
+defaultChDictModes = [XPT $ modernCHSDMode, XPT $ bigCHSDMode]
 defaultCalcModes = [calcMode]
 
-defaultModesForInput (c:cs)
-    | isNumber c || isSymbol c = defaultCalcModes
-    | otherwise = defaultEngDictModes ++ defaultChDictModes
 -- }}}
 
 ----- Vimb prompt -- {{{
@@ -1968,12 +1896,11 @@ handleKeyEventForXMonadMode (KeyEvent {ev_event_type = t, ev_state = m, ev_keyco
     | t == keyPress = do
         withDisplay $ \dpy -> do
             sym <- io $ keycodeToKeysym dpy code 0
-            jumpWindowSaved <- getJumpWindowSavedState
             let keyStr = keysymToString sym
                 -- , ; . are excepted because they DO have meaning during a stack retrace
                 validKeysForRetraceAllTime = (myModMask, "period") : [(mk, k) | mk <- [myModMask, myModMask .|. shiftMask, myModMask .|. controlMask, myModMask .|. controlMask .|. shiftMask, myModMask .|. mod1Mask, myModMask .|. mod1Mask .|. controlMask], k <- [historyBackKey, historyForwardKey]]
-                validKeysForRetraceWhenJumpWindowSaved = [(myModMask, k) | k <- ["comma", "semicolon"]]
-            if (m, keyStr) `elem` (validKeysForRetraceAllTime ++ if jumpWindowSaved then validKeysForRetraceWhenJumpWindowSaved else []) 
+                -- validKeysForRetraceWhenJumpWindowSaved = [(myModMask, k) | k <- ["comma", "semicolon"]]
+            if (m, keyStr) `elem` validKeysForRetraceAllTime 
                    then return ()
                    else clearAllMarks
         return (All True)
@@ -1981,9 +1908,9 @@ handleKeyEventForXMonadMode _ = return (All True)
 
 -- we need to put the toggle in the front interface so that the subsequent triggering of m-; and m-, does not break the save toggle
 -- dir is the direction to navigate through the history (Prev means going back in history and Next means going forward)
-jumpWindowHistory dir p saved = do
-    saveJumpWindowSavedState saved 
-    if saved then saveFindFunction (\dr -> jumpWindowHistory (if dr == dir then Next else Prev) p True) else return ()
+jumpWindowHistory dir p = do
+    -- saveJumpWindowSavedState saved 
+    -- if saved then saveFindFunction (\dr -> jumpWindowHistory (if dr == dir then Next else Prev) p True) else return ()
     let nmat dirp = nextMatch History (dirp <&&> validWindow <&&> fmap not isMinimized <&&> p) 
     case dir of
          Prev -> withFocused markWindow >> nmat (fmap not windowIsMarkedQuery)
@@ -1991,13 +1918,13 @@ jumpWindowHistory dir p saved = do
 
 -- we need to have a toggle to indicate whether the last jump window query is saved; this is used when we clear the modes (if the last query is saved then m-; and m-, are excepted otherwise they clear the modes
 
-data JumpWindowSavedState = JumpWindowSavedState Bool deriving (Typeable, Show, Read)
-instance ExtensionClass JumpWindowSavedState where
-    initialValue = JumpWindowSavedState False
-    extensionType = PersistentExtension
+-- data JumpWindowSavedState = JumpWindowSavedState Bool deriving (Typeable, Show, Read)
+-- instance ExtensionClass JumpWindowSavedState where
+--     initialValue = JumpWindowSavedState False
+--     extensionType = PersistentExtension
  
-getJumpWindowSavedState = XS.get >>= \(JumpWindowSavedState s) -> return s
-saveJumpWindowSavedState = XS.put . JumpWindowSavedState
+-- getJumpWindowSavedState = XS.get >>= \(JumpWindowSavedState s) -> return s
+-- saveJumpWindowSavedState = XS.put . JumpWindowSavedState
 
 -- }}}
 
@@ -2005,9 +1932,9 @@ saveJumpWindowSavedState = XS.put . JumpWindowSavedState
 
 -- this module tries to simulate the f <key> behavior in vim
 -- the module saves just one thing: a function that takes a dir argument and can be invoked later through m-, and m-;
-data QuickFindFunction = QuickFindFunction (Direction1D -> X ()) deriving Typeable
+data QuickFindFunction = QuickFindFunction (Direction1D -> X (Maybe (Window, Bool))) deriving Typeable
 instance ExtensionClass QuickFindFunction where
-    initialValue = QuickFindFunction (\d -> return ())
+    initialValue = QuickFindFunction (\d -> return Nothing)
 
 saveFindFunction q = XS.put $ QuickFindFunction q
 getFindFunction = XS.get >>= \(QuickFindFunction q) -> return q
@@ -2026,33 +1953,24 @@ getLastCommand = XS.get >>= \(LastCommand a) -> return a
 -- }}}
 
 ---------------- Keyboard hotkey -- {{{
-
--- the cycling protocol is useful for a set of windows matching a query; useful for task groups, etc.
-cycleMatchingOrDo qry dir f d = do
-    -- get all the windows before the focused and after the focused depending on the direction
-    (l, r, gf, ml, float, ll, rl) <- getSides
-    -- get the focused window
-    mf <- gets (W.peek . windowset)
-    let wwins = rl ++ ll
-        (awinr, awinl, bwins, cwins) = case mf of
-                        Just f 
-                            | [f] == gf -> (r, l, float, ml)
-                            | otherwise -> case break (==f) float of
-                                (fl, _:fr) -> (fr, fl, l++gf++r, ml)
-                                -- the focus is neither on the focal of the stack nor on float (something is wrong)
-                                _ -> ([], [], float, ml)
-                        _ -> ([], [], float, ml)
-        winl = if dir == Next then awinr++awinl++bwins++cwins++wwins else reverse $ wwins++cwins++bwins++awinr++awinl
-    matches <- filterM (runQuery qry) winl
-    case matches of
-         [] -> d
-         ws -> f ws
-
 allOrderedWindows = do
     -- get all the windows before the focused and after the focused depending on the direction
     (l, r, gf, ml, float, ll, rl) <- getSides
     return $ ll ++ l ++ gf ++ r ++ float ++ ml ++ rl
 orderedWindowsMatchingPredicate p = allOrderedWindows >>= filterM (runQuery p)
+wrapAroundWindowsMatchingPredicate dir p = do
+    -- get all the windows before the focused and after the focused depending on the direction
+    (l, r, gf, ml, float, ll, rl) <- getSides
+    mf <- gets (W.peek . windowset)
+    let wwins = rl ++ ll
+        (awinr, awinl, bwins, cwins) = case mf of
+                                        Just f | [f] == gf -> (f:r, l, float, ml)
+                                               | otherwise -> case break (==f) float of
+                                                                    (fl, _:fr) -> (f:fr, fl, l++gf++r, ml)
+                                                                    _ -> ([], [], float, ml)
+                                        _ -> ([], [], float, ml)
+        winl = if dir == Next then awinr++cwins++awinl++wwins else reverse $ wwins++bwins++awinr++cwins++awinl
+    filterM (runQuery p) winl
 
 
 getSides = do
@@ -2063,8 +1981,7 @@ getSides = do
     -- it's safer to get the windows for the current workspace from group stacks (it's more stable)
     gs <- G.getCurrentGStack
     ml <- fmap reverse getCurrentMinimizedWindows
-    let (l, r) = maybe ([],[]) lrs gs
-        gf = maybeToList $ maybe Nothing G.focal gs
+    let (l, r, gf) = maybe ([],[],[]) (\(W.Stack f u d) -> (reverse u, d, [f])) $ maybe Nothing G.toZipper gs
         (b, a') = break ((==W.currentTag winset). W.tag) wss
         a = if not $ null a' then tail a' else []
         ll = nub $ concatMap (W.integrate' . W.stack) b
@@ -2072,14 +1989,10 @@ getSides = do
         -- also retrieve the float windows (for comprehensiveness)
         currswins = W.integrate' $ W.stack $ W.workspace $ W.current winset
         float = filter (not . (`elem` (l++r++ml++gf))) currswins 
+    -- obtain information regarding the current window: Either Window (before, window, after)
+    -- the focused window is either focused in the stack or in the floats
     return (l, r, gf, ml, float, ll, rl)
-        where lrs (G.Leaf (Just (W.Stack f u d))) = (reverse u, d)
-              lrs (G.Leaf Nothing) = ([], [])
-              lrs (G.Node (W.Stack f u d)) = let (l, r) = lrs f in (concatMap G.flattened (reverse u) ++ l, r ++ concatMap G.flattened d)
 
-    -- implementation that uses the group stacks instead
-cycleMatchingOrDoSaved qry dir f d = saveFindFunction (\dr -> cycleMatchingOrDo qry (if dr == dir then Next else Prev) f d) >> cycleMatchingOrDo qry dir f d
-cycleMatching qry dir = cycleMatchingOrDoSaved qry dir (deminimizeFocus . head) (return ())
 
 data TaskGroup = TaskGroup { taskGroupName :: String
                              -- ^ the name given for this task group
@@ -2290,7 +2203,7 @@ taskGroups = [
           }
       -- gimp singleton
     , def { taskGroupName = "gimp"
-          , filterKey = "g"
+          , filterKey = "S-m"
           , filterPredicate = className =? "Gimp"
           , localFirst = False
           , construct = runShell "gimp"
@@ -2327,9 +2240,6 @@ siftTaskGroups gs = if len <= 1 then gs else head gs : fmap loadExQueryForGroupA
           loadAndPredicateForGroupAtIndex i p = let g = gs !! i in g {filterPredicate = p <&&> (filterPredicate g)}
           len = length gs
 
-{-allStaticTaskGroups = taskGroups ++ fmap (\(TaskGroup k p l a lh ws) -> WindowGroup k (p <&&> notInAnyWindowGroup) l a lh ws) siftedWindowGroups-}
-    {-where notInAnyTaskGroup = foldl (<&&>) alwaysTrue $ fmap (fmap not .filterPredicate) taskGroups-}
-
 -- this dynamic lookup on the window group should return the window group with the filter predicate SIFTED
 taskGroupOfWindow :: [TaskGroup] -> Window -> X (Maybe TaskGroup)
 taskGroupOfWindow gs win = taskGroupIndexOfWindow gs win >>= return . fmap (gs !!)
@@ -2345,17 +2255,6 @@ taskGroupIndexOfWindow gs win = if null gs then return Nothing else nextMatch wi
               | otherwise = do
                   re <- runQuery (predAtIndex i) w
                   if re then return (Just i) else nextMatch w (i+1)
-
--- rewrite cycle between groups to do according to the status bar
--- the fun will receive a ([(b, w)], task group), b == whether that window is focused, w == the window
-cycleTaskGroups dir = do
-    cycleMatchingOrDoSaved toggleTaskGroupPredicate dir (\wins -> do
-            -- get the task groups for all the windows
-            tgs <- mapM (taskGroupOfWindow taskGroups) wins
-            case groupBy (\(a,_) (b,_) -> a==b) $ zip tgs wins of
-                 (h:_) -> nextMatch History $ isOneOfWindows $ snd $ unzip h
-                 _ -> if null wins then return () else focus $ head wins
-        ) (return ())
 
 -- return a multistack (only two level) grouped by the tasks of the windows
 getCurrentTaskGStack wgs = do
@@ -2454,430 +2353,422 @@ charToKeyStroke c = if isUpper c then "S-"++[toLower c]
                                            '?' -> "S-/"
                                            _ -> [c]
 
-shiftWindowsHere [] = return ()
-shiftWindowsHere ls = withFocused $ \f ->
-    if f `elem` ls then if length ls == 1 then return () else shiftWindowsHereAndFocusLast ls f
-                   else shiftWindowsHereAndFocusLast ls (head ls)
-shiftWindowsHereAndFocusLast [] _ = return ()
-shiftWindowsHereAndFocusLast wins f = do
+-- if the focused element is inside the windows to be pasted then we can keep selecting that (is that ever useful though?)  
+shiftWindowsHere = shiftWindowsHereAndFocusLast True Nothing
+shiftWindowsHereAndFocusLast _ _ [] = return ()
+-- we can specify whether we want to keep focus 
+-- this defaults to keeping focus
+shiftWindowsHereAndFocusLast insertBefore f wins = do
     -- deminimize all of them
-    mapM deminimize wins
-    curr <- gets (W.currentTag . windowset)
-    -- move to the temp workspace and then move back
-    -- move one by one because we can't be sure if the windows are the last one in the tab group (really annoying though)
-    mapM (windows . W.shiftWin scratchpadWorkspaceTag) wins
-    {-windows $ \s -> foldr (W.shiftWin scratchpadWorkspaceTag) s wins-}
-    windows $ \s -> W.focusWindow f $ foldr (W.shiftWin curr) s wins
+    mf <- gets (W.peek . windowset)
+    if maybeToList mf == wins 
+       then return () 
+       else do
+            mapM deminimize wins
+            curr <- gets (W.currentTag . windowset)
+            -- move to the temp workspace and then move back
+            -- move one by one because we can't be sure if the windows are the last one in the tab group (really annoying though)
+            mapM (windows . W.shiftWin scratchpadWorkspaceTag) wins
+            {-windows $ \s -> foldr (W.shiftWin scratchpadWorkspaceTag) s wins-}
+            mf <- gets (W.peek . windowset)
+            let fc = maybe (maybe id W.focusWindow mf) W.focusWindow f
+            if insertBefore
+               then windows $ \s -> fc $ foldr (W.shiftWin curr) s wins
+               -- this doesn't seem to work
+               else windows $ \s -> fc $ foldl (\s w -> W.swapDown $ W.shiftWin curr w s) s wins
 
 hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 
--- entering the extended selection mode will change a few things
----- any one the following triggers the selection mode 
+-- implementing the motion keys list
+-- we don't allow 0 because that is kept for use as d0
+numberKeys = zip (fmap show [1..9]) [1..9]
+tabKeys = [ (fromJust $ subgroupIndexToSymbol n, n) | n <- [0..(length subgroupSymbolSequence - 1)] ]
+columnKeys = tabKeys
+groupKeys = zip (fmap show [1..9]) [0..9]
+regKeys :: [(String, (String -> X a) -> X (Maybe a))]
+regKeys = [(charToKeyStroke k, feedReg [k]) | k <- typeablesNoSlashNorQuote ]
+feedReg k fun = fmap Just $ fun k
+regReadonlyKeys = [("'", feedReg "'")]
+regPromptKey prompt = ("/", \a -> initMatches >>= \r -> tagPrompt (myXPConfig r) {
+    searchPredicate = prefixSearchPredicate
+} prompt a)
 
----- m-f <symbol> selects the current window to the given window tab symbol (navigating there)
----- m-f s-4 selects until the end
-
----- m-x <symbol> selects the given task group
----- m-x ' <symbol> selects the windows with the given mark within the current group
----- m-s-' <symbol> moves the group here and then marks them
----- m-s-[ <symbol> moves the group here and then marks them
----- m-v 
----- m-x <symbol> selects the tab no
----- m-x m-p selects the current tab and the one before, navigating to it as well
----- m-x m-n selects the current tab and the one next, while navigating there
----- m-s-x selects all tabs
-
-------- inside the selection mode you can
-------- m-<symbol> selects the tab for the given tab no 
-------- m-[ <symbol> selects the given group of windows
-------- m-' <symbol> selects the given marked window group
-------- m-p and m-n now selects everything inbetween: m-n selects the current window and goes to the next one; while m-p goes to the previous window and then selects it
-------- other keys listed above still applies
-------- any other key executes that function and invalidates the visual mode (e.g. m1-<symbol>)
-
-focusNextTab = sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusDown
-focusPreviousTab = sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusUp
-selectTab n = do
-     ls <- getBaseCurrentWindows
-     if n < length ls then toggleWindowSelection $ ls !! n
-                      else return ()
-selectTaskGroup g = getBaseCurrentWindows >>= filterM (runQuery (filterPredicate g)) >>= toggleWindowsSelection
-selectTagGroupForChar t = getBaseCurrentWindows >>= filterM (runQuery (hasTagQuery [t])) >>= toggleWindowsSelection
-
-myKeys toggleFadeSet = 
-    -- extended selection for tab no
-    [ ("M-x M-p", toggleCurrentWindowSelection >> enterExtendedSelectionMode)
-    , ("M-x M-n", toggleCurrentWindowSelection >> focusNextTab >> enterExtendedSelectionMode)
-    , ("M-S-x", getBaseCurrentWindows >>= toggleWindowsSelection >> enterExtendedSelectionMode)
-    ]
-    -- extended selection for tab numbers
-    ++
-    [ ("M-x "++mf++(fromJust $ subgroupIndexToSymbol n), selectTab n >> enterExtendedSelectionMode)
-    | n <- [0..(length subgroupSymbolSequence - 1)]
-    , mf <- ["", "M-"]]
-    -- find mode:
-    ++
-    [ ("M-f "++mf++(fromJust $ subgroupIndexToSymbol n), do
-         ms <- getBaseCurrentStack
-         case ms of
-              Just (W.Stack f u d) -> let (g, ff) = if n >= ci then (init (f : fw), last (f : fw))
-                                                               else (bw, last $ f : bw)
-                                          ci = length u 
-                                          (fw, mfw) = splitAt (min (n - ci) (length d)) d
-                                          (bw, _) = splitAt (min (ci - n) (length u)) u in do
-                                         toggleWindowsSelection g
-                                         focus ff
-                                         enterExtendedSelectionMode
-              _ -> return ()
-       )
-    | n <- [0..(length subgroupSymbolSequence - 1)]
-    , mf <- ["", "M-"]]
-    ++
-    [("M-f "++mf++"S-4", do
-        ms <- getBaseCurrentStack
-        case ms of
-             Just (W.Stack f u d) -> let g = f:d in do
-                 toggleWindowsSelection g
-                 -- we need to move the selection forward (so that to be fully compatible with the m-p m-n interface) 
-                 if not (null u) then focus $ last u
-                                 else return ()
-                 enterExtendedSelectionMode
-             _ -> return ())
-     | mf <- ["", "M-"]]
-    -- extended selection for task groups
-    ++
-    [ ("M-x "++(filterKey g), selectTaskGroup g >> enterExtendedSelectionMode)
-    | g <- allTaskGroupsWithFilterKey []
-    ]
-    -- extended selection for tagged windows
-    ++
-    [ ("M-x ' "++charToKeyStroke t, selectTagGroupForChar t >> enterExtendedSelectionMode)
-    | t <- typeablesNoSlashNorQuote]
-    ++
-    -- adding in the keybindings for the extended selection mode
-    fmap (\(k, a) -> 
-        -- first filter all the keys that are going to be 
-        let syms = zip [0..] subgroupSymbolSequence 
-            tkgs = allTaskGroupsWithFilterKey []
-            tags = zip typeablesNoSlashNorQuote $ fmap charToKeyStroke typeablesNoSlashNorQuote in
-        case ( find ((\s -> "M-"++[s] == k) . snd) syms 
-             , find ((\fk -> "M-[ "++fk == k || "M-] "++fk == k) . filterKey) tkgs
-             , find ((\t -> "M-' "++t == k) . snd) tags
-             ) of
-             (Just (ind, _), _, _) -> (k, flip ifInSelectionMode a $ selectTab ind >> refresh)
-             (_, Just g, _) -> (k, flip ifInSelectionMode a $ selectTaskGroup g >> refresh)
-             (_, _, Just (tc, _)) -> (k, flip ifInSelectionMode a $ selectTagGroupForChar tc >> refresh)
-             _ | k == "M-p" -> (k, flip ifInSelectionMode a $ focusPreviousTab >> toggleCurrentWindowSelection >> refresh)
-               | k == "M-n" -> (k, flip ifInSelectionMode a $ toggleCurrentWindowSelection >> focusNextTab)
-               | k == "M-<Esc>" -> (k, flip ifInSelectionMode a exitExtendedSelectionMode)
-               -- hack here to allow these keys to toggle on the extendselectedmode
-               | k `elem` ["M-v", "M-S-v", "M-C-S-u"] -> (k, a)
-               | "M-S-[ " `isPrefixOf` k -> (k, a)
-               | "M-S-] " `isPrefixOf` k -> (k, a)
-               | "M-S-' " `isPrefixOf` k -> (k, a)
-               | otherwise -> (k, a >> exitExtendedSelectionMode))
-    ----- Repeat-- {{{
-    (appendActionWithException saveLastCommand [ ("M-.", getLastCommand >>= id) ] 
-    -- }}}
-    ----- wallpaper invoke -- {{{
-    ([ 
-      ("M-C-<Return>", initMatches >>= \r -> mkWPPrompt toggleFadeSet (myXPConfigWithQuitKey (myModMask .|. controlMask, xK_Return) r) {
-              autoComplete = Just 0
-            , searchPredicate = repeatedGrep
-       })
-    ]
-    -- }}}
-    ++
-    [ 
-    ----- XMonadMode manipulation-- {{{
-    -- we need to call runLogHook to force an update to the log hook
-      ("M-<Esc>", clearAllMarks >> clearAllSelection)
-    -- }}}
-    ----- Window manipulation-- {{{
-    , ("M-<L>", withFocused $ keysMoveWindow (-10,0))
-    , ("M-<R>", withFocused $ keysMoveWindow (10,0))
-    , ("M-<U>", withFocused $ keysMoveWindow (0,-10))
-    , ("M-<D>", withFocused $ keysMoveWindow (0,10))
-    , ("M-S-<L>", withFocused $ keysAbsResizeWindow (-10,0) (0,0))
-    , ("M-S-<R>", withFocused $ keysAbsResizeWindow (10,0) (0,0))
-    , ("M-S-<U>", withFocused $ keysAbsResizeWindow (0,-10) (0,0))
-    , ("M-S-<D>", withFocused $ keysAbsResizeWindow (0,10) (0,0))
-    -- }}}
-    ----- Window task group navigation-- {{{
-    -- common definitions of some of the classes
-    , ("M-C-]", cycleTaskGroups Next)
-    , ("M-C-[", cycleTaskGroups Prev)
-    , ("M-[ u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
-    , ("M-] u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
-    ]
-    -- cycling task group by number
-    -- ++ 
-    -- [ ("M1-C-"++(show $ n+1), do
-    --         cur <- getCurrentTaskGStack taskGroups
-    --         case cur  of
-    --              Just (G.Node s@(W.Stack fg us ds))
-    --                 | n == length us -> toggleTaskGroup
-    --                 | n < length ls -> nextMatch History (isOneOfWindows $ G.flattened $ ls !! n)
-    --                 | otherwise -> return ()
-    --                     where ls = W.integrate s
-    --              _ -> return ()
-    --    )
-    -- | n <- filter (/= 5) [0..8]]
-    ++
-    [ ("M-"++dc++" "++(filterKey g), 
-        let pre = localFirstFilterPredicate g in
-        -- determine if we are in the correct group, if yes then cycle, otherwise go to the last visited window in that group
-        cycleMatchingOrDoSaved pre dir (\wins -> do
-            mf <- gets (W.peek . windowset)
-            res <- case mf of
-                       Just f -> runQuery pre f
-                       _ -> return False
-            if res then deminimizeFocus $ head wins
-                   else withNextMatchOrDo History (isOneOfWindows wins) deminimizeFocus (return ())
-        ) $ constructInDir (construct g) dir)
-    | (dc, dir) <- [("[", Prev), ("]", Next)]
-    , g <- allTaskGroupsWithFilterKey ["M-[","M-]"] ]
-    -- forced creation of new windows
-    ++
-    -- [ ("M-S-"++dc++" "++(filterKey g), constructInDir (construct g) dir)
-    -- | (dc, dir) <- [("[", Prev), ("]", Next)]
-    -- , g <- allTaskGroupsWithFilterKey ["[","]","S-[","S-]","M-[", "M-]", "M-S-[", "M-S-]"] ]
-    -- recall all windows with the given filter key
-    [ ("M-S-"++dc++" "++(filterKey g), orderedWindowsMatchingPredicate (localFirstFilterPredicate g) >>= \ws -> do
-                            let rws = if dir == Prev then reverse ws else ws
-                            markWindowsSelection rws
-                            shiftWindowsHere rws
-                            enterExtendedSelectionMode
+data Motion = Motion {
+        -- the window that should be focused by navigation
+          target :: Maybe (Window, Bool)
+        , simpleX :: Maybe (X ())
+        , toggleList :: Maybe [Window]
+        , historyToggle :: Maybe (X ())
+        , triggerOnNothing :: Maybe (X ())
+        , searchFunction :: Maybe (Direction1D -> X (Maybe (Window, Bool)))
+    }
+instance Default Motion where
+    def = Motion {
+          target = Nothing
+        , simpleX = Nothing
+        , toggleList = Nothing
+        , historyToggle = Nothing
+        , triggerOnNothing = Nothing
+        , searchFunction = Nothing
+        }
+-- motion keys are usually only obtained through X (). This is because there are a bunch of things to calculate
+motionKeys :: [(String, String, X Motion)]
+motionKeys = 
+    -- M1 toggles
+    [ (sfk++t, fk++t, do
+             ls <- getBaseCurrentWindows
+             let len = length ls
+                 w = ls !! ind
+                 ind = (min (len-1) n) `mod` len
+                 def' = def { simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt ind }
+             return $ case (len, leap) of
+                          (0, _) -> def
+                          (_, False) -> def' { target = Just (w, True) }
+                          _ | n >= len -> def
+                            | otherwise -> def' { target = Just (w, True) 
+                                                , toggleList = Just [w]
+                                                , historyToggle = Just $ nextMatch History $ isOneOfWindows ls 
+                                                }
       )
-    | (dc, dir) <- [("[", Prev), ("]", Next)]
-    , g <- allTaskGroupsWithFilterKey ["M-S-[", "M-S-]"] ]
-    ++
-    [ ("M-c "++(filterKey g), construct g)
-    | g <- allTaskGroupsWithFilterKey ["M-c"] ]
-    ++
-    -- m-S-c allows you to create multiple copies of a given task group
-    [ ("M-S-c "++(filterKey g)++" "++show n, sequence_ $ take n' $ repeat (construct g))
-    | (n, n') <- (zip [1..9] [1..9]) ++ [(0, 10)]
-    , g <- allTaskGroupsWithFilterKey ["M-S-c"]
+    | (sfk, fk, leap, quick) <- [("M1-", "M1-", True, False), ("f ", "M-f ", False, False), ("", "M-g ", False, True)]
+    , (t, n) <- if quick then [("0", 0), ("S-4", -1)] else tabKeys
     ]
-    -- }}}
-    ----- History level navigation -- {{{
+    -- C- toggles
     ++
-    [ ("M-"++m++dirk++ms, jumpWindowHistory dir p saved)
-    | (dirk, dir) <- [(historyBackKey, Prev), (historyForwardKey, Next)]
-    , (m, ms, p, saved) <- [ ("", "", alwaysTrue, False) ] 
-                           ++
-                           -- the task group filtered history navigation is experimental -- it can changes the order of history in complex ways
-                           [ ("S-"++sm, " "++(filterKey g), smp <&&> filterPredicate g, True) 
-                           | g <- allTaskGroupsWithFilterKey ["M-S-o", "M-S-i"]
-                           , (sm, smp) <- [("", alwaysTrue)] ]
-                           ++
-                           -- inter group stack level
-                           [ ("C-", "", toggleGroupPredicate, True)
-                           -- within the group stack
-                           , ("M1-", "", toggleWithinGroupPredicate, True)
-                           -- within different task group
-                           , ("C-M1-", "", toggleTaskGroupPredicate, True)]
+    [ (sfk++c, fk++c, do
+             gs <- G.getCurrentGStack
+             let def' = def {simpleX = Just $ sendMessage $ G.Modify $ G.focusGroupAt n}
+             case gs of
+                  Just (G.Node s) -> let ls = W.integrate s
+                                         len = length ls
+                                         g = ls !! (min (len-1) n)
+                                         w = G.focal g 
+                                     in return $ case (len, leap) of
+                                                    (0, _) -> def
+                                                    (_, False) -> def' { target = fmap (\a -> (a,True)) w }
+                                                    _ | n >= len -> def
+                                                      | otherwise -> def' { target = fmap (\a -> (a,True)) w
+                                                                          , toggleList = Just $ G.flattened g
+                                                                          , historyToggle = Just $ toggleGroup
+                                                                          }
+                  _ -> return def
+      )
+    | (c, n) <- columnKeys 
+    , (sfk, fk, leap) <- [("C-", "C-", True), ("S-f ", "M-S-f ", False)]
     ]
-    -- }}}
-    ----- Window deletion mode -- {{{
-    -- m-d goes into the mode where all selected windows are deleted; m-s-d will only delete windows that are unfocused
     ++
-    -- [ ("M-"++m++"d "++(filterKey g), ifWindows (mp <&&> (localFirstFilterPredicate g)) (focusNextKillWindows) (return ()))
-    -- | (m, mp) <- [("", alwaysTrue), ("S-", isUnfocused)]
-    -- , g <- allTaskGroupsWithFilterKey ["M-d", "M-S-d"] ]
-    [ ("M-d "++(filterKey g), ifWindows (localFirstFilterPredicate g) (focusNextKillWindows) (return ()))
-    | g <- allTaskGroupsWithFilterKey ["M-d"] ]
-    -- }}}
-    ----- Info prompt system (now centralized as an intelligent system) -- {{{
-    {-++-}
-    {-[ ("M-c "++[c], launcherPrompt myInfoXPConfig {defaultText = [c]} $ defaultModesForInput [c])-}
-    {-| c <- "-+="++['0'..'9']++['a'..'z'] ]-}
-    {-++-}
-    {-[("M-c <Return>", do-}
-        {-l <- fmap (head . lines) $ runProcessWithInput "xsel" [] ""-}
-        {-launcherPrompt myInfoXPConfig {defaultText = l} $ defaultModesForInput l)]-}
-    -- the compute interface
-    ++
-    [
-      ("M-g " ++ k, initMatches >>= \r -> launcherPrompt (myInfoXPConfig r) {defaultText = t} modes)
-      | (k, t, modes) <- [(k', t', defaultCalcModes) | (k', t') <- [("M-g", "")]++fmap (\c -> ([c], [c])) typeablesWithoutAlphas] 
-                         ++
-                         [(k', t', defaultEngDictModes ++ defaultChDictModes) | (k', t') <- [("M-d", "")]++fmap (\c -> ([c], [c])) alphas]
+    -- perform the saved find function forward and backwards
+    [ (sfk, "M-"++sfk, do
+        w <- playLastFindFunction dir
+        -- our rational is that if this is a find function then it is continuous
+        return def { target = w }
+      )
+    | (sfk, dir) <- [(";", Next), (",", Prev)]
     ]
-    -- }}}
-    ----- Common Tasks-- {{{
     ++
-    [
-      ("M-M1-q", spawn myRestartCmd)
-    -- we should also kill the processes and then exit
-    , ("M-M1-S-q", spawn myKillCmd >> io (exitWith ExitSuccess))
-    -- cycling of the window styles
-    , ("M-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Next)
-    , ("M-S-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Prev)
-    {-, ("M-y", spawn "xvkbd -no-jump-pointer -xsendevent -text \"\\D1`xsel`\" 2>/dev/null")-}
-    , ("<F10>", spawn "amixer get Master | fgrep '[on]' && amixer set Master mute || amixer set Master unmute")
-    , ("<F11>", spawn $ "amixer set Master 5-; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
-    , ("<F12>", spawn $ "amixer set Master 5+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
-    -- }}}
-    ----- Prompts-- {{{
-    -- bind change mode to some key that would never be used
-    , ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfigWithQuitKey (myModMask, xK_r) r) { changeModeKey = xK_VoidSymbol, searchPredicate = repeatedGrep })
-    , ("M-b", initMatches >>= mkVBPrompt . myXPConfigWithQuitKey (myModMask, xK_b))
-    -- xmonad commands
-    , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
-    -- tag windows
-    , ("M-u", getSelectedWindowStack >>= mapM_ unTag . W.integrate')
+    -- word and back
+    [ (sfk++wk, fk++wk,
+          let move' dir = do
+               mfs <- getFocusStack
+               let sign' = if dir == Next then sign else sign * (-1)
+               return $ case mfs of
+                       Just (W.Stack f u d) -> Just (Just (ls !! ind, include), ind)
+                            where ci = length u
+                                  ls = W.integrate' mfs 
+                                  ind = (ci + sign' * n) `mod` (length ls)
+                       _ -> Nothing
+              move = fmap (maybeToMaybe fst) . move'
+          in move' Next >>= \mt -> return $ case mt of
+                    Just (t, ind) -> def { target = t
+                                         , searchFunction = Just move
+                                         , simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt ind 
+                                         }
+                    _ -> def
+      )
+    | (nk, n) <- numberKeys
+    , (wk, sign, include) <- [("b", -1, True), ("w", 1, False)]
+    , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
-    -- search interface
     ++
-    [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow a)
-    | (mf, p, a) <- [ ("", "Go to window: ", deminimizeFocus)
-                    , ("S-", "Bring window: ", shiftWindowsHere . wrapList)
-                    , ("C-", "Delete window: ", focusNextKillWindow)
+    [ (sfk, fk, do
+        -- get the second level nesting counting from the top
+        ins <- focusIsInGStack
+        bs <- fmap (maybeToMaybe G.bases . maybeToMaybe G.current) G.getCurrentGStack
+        let (t, ind) = case (ins, bs) of
+                             (True, Just (G.Node s)) -> (fmap (\a -> (a, True)) $ G.focal $ ls !! ind', ind')
+                                where ls = W.integrate s
+                                      len = length ls
+                                      ind' = (min n (len-1)) `mod` len
+                             _ -> (Nothing, -1)
+        return def {
+                  target = t
+                , simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt ind
+            }
+      )
+    | (sfk, fk, n) <- [("g g", "M-g g", 0)] 
+                      ++ 
+                      [ (nk++" S-g", "M-g "++nk++" S-g", n')
+                      | (nk, n') <- groupKeys] 
+                      ++
+                      [ ("S-g", "M-S-g", -1)]
+    ]
+    -- the h j k l's
+    ++
+    [ (sfk++wk, fk++wk,
+          let move' dir' = do
+                  let sign = if dir == dir' then 1 else -1
+                  ins <- focusIsInGStack
+                  bs <- fmap gfun G.getCurrentGStack
+                  return $ case (ins, bs) of
+                      (True, Just (G.Node s@(W.Stack _ up _))) -> Just ((fmap (\a -> (a, True)) $ G.focal $ ls !! ind), ind)
+                         where ls = W.integrate s 
+                               len = length ls
+                               ci = length up
+                               ind = (ci + sign * n) `mod` len
+                      _ -> Nothing
+              move = fmap (maybeToMaybe fst) . move'
+          in move' Next >>= \mt -> return $ case mt of
+                    Just (t, ind) -> def { target = t
+                                         , searchFunction = Just move
+                                         , simpleX = Just (sx ind)
+                                     }
+                    _ -> def
+      )
+    | (nk, n) <- numberKeys
+    , (wk, dir, gfun, sx) <- [(wk', dir', maybeToMaybe G.bases . maybeToMaybe G.current, \n -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt n)
+                             | (wk', dir') <- [("k", Prev), ("j", Next)]]
+                             ++
+                             [(wk', dir', id, \n -> sendMessage $ G.Modify $ G.focusGroupAt n)
+                             | (wk', dir') <- [("h", Prev), ("l", Next)]]
+    , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
+    ]
+    ++
+    [ ("g "++filterKey g, "M-g "++filterKey g, do
+            -- the cycling and toggling would require different techniques
+            let move dir = wrapAroundWindowsMatchingPredicate dir (fmap not isFocused <&&> localFirstFilterPredicate g) >>= return . fmap (\a->(a,True)) . listToMaybe
+            t <- move Next 
+            wins <- orderedWindowsMatchingPredicate ((filterPredicate g) <&&> isInCurrentWorkspace)
+            return def {
+                      target = t
+                    , toggleList = Just wins
+                    , searchFunction = Just move
+                    , triggerOnNothing = Just $ construct g
+                }
+      )
+    | g <- allTaskGroupsWithFilterKey ["c"]
+    ]
+    ++
+    [ ("' "++tk, "M-g ' "++tk, do
+            let move dir = do
+                    re <- ta (\t -> case t of
+                                         "'" -> fmap maybeToList $ nextMatched History (return True)
+                                         _ -> wrapAroundWindowsMatchingPredicate dir (fmap not isFocused <&&> hasTagQuery t))
+                    return $ case re of
+                         Just (a:_) -> Just (a, True)
+                         _ -> Nothing
+            t <- move Next
+            mwins <- ta (\t -> orderedWindowsMatchingPredicate (hasTagQuery t))
+            return def {
+                      target = t
+                    , toggleList = Just $ fromMaybe [] mwins
+                    , searchFunction = Just move
+                }
+      )
+    | (tk, ta) <- regKeys ++ [regPromptKey "Select windows from register:"] ++ regReadonlyKeys
+    ]
+
+motionKeyCommands' = flip fmap motionKeys $ \(_, k, x) -> (k, do
+    mf <- gets (W.peek . windowset)
+    Motion mt simpx mtogls mtoggle mconstruct mfind <- x
+    -- first save the function for future reference
+    case mfind of
+         Just fun -> saveFindFunction fun
+         _ -> return ()
+    -- if in visual mode then update the end marker
+    inv <- isInVisualMode
+    let fx t = if isJust simpx then fromJust simpx else deminimizeFocus t
+    case (mt, mtogls, mtoggle, mconstruct, mf, inv) of
+         (_, Just togls, _, _, _, True) -> visualModeUpdateToggleSet togls >> refresh
+         (Just (t, _), _, _, _, _, True) -> visualModeUpdateEndMarker t >> fx t
+         (Just (t, _), _, Just toggle, _, Just f, False) | t == f -> toggle
+         (Just (t, _), _, _, _, _, False) -> fx t
+         (Nothing, _, _, Just construct, _, _) -> construct
+         _ -> return ())
+
+motionKeyCommands = concatMap processKey motionKeyCommands' 
+
+-- return the normal selection for most of the commands
+motionKeyWindowSelection = flip fmap motionKeys $ \(k, _, x) -> (k, do
+    mf <- gets (W.peek . windowset)
+    Motion mt _ mls _ _ _ <- x
+    case mls of
+         Just ls -> return ls
+         _ -> do
+           wins <- allOrderedWindows
+           return $ case (mf, mt) of
+                        (Just f, Just (t, include)) -> case (elemIndex f wins, elemIndex t wins) of
+                                                 (Just fi, Just ti) | fi < ti -> drop fi $ take (ti + if include then 1 else 0) wins
+                                                                    | fi == ti -> [f]
+                                                                    | otherwise -> drop ti $ take fi wins
+                        _ -> [])
+
+-- the first argument is the group key
+struct gfun n = do
+    bs <- fmap gfun G.getCurrentGStack
+    let ls = case bs of
+                 Just (G.Node (W.Stack f u d)) -> concatMap G.flattened $ take n $ [f]++d
+                 _ -> []
+    return ls
+groupList = struct (maybeToMaybe G.bases . maybeToMaybe G.current)
+columnList = struct id
+structKeys gk = 
+    [ (fks, xls)
+    | (nk, n) <- numberKeys
+    , (fk, xls) <- [ (gk, groupList n)
+                   , ("c", columnList n)]
+    , fks <- [nk++" "++fk] ++ if n == 1 then [fk] else []
+    ]
+wssKeys =
+    [ (fks, do
+            wss <- allWorkspaces
+            curr <- gets (W.currentTag . windowset)
+            let ls = concatMap (W.integrate' . W.stack) $ take n $ snd $ break ((==curr).W.tag) wss
+            return ls)
+    | (nk, n) <- numberKeys
+    , fks <- [nk++" s"] ++ if n == 1 then ["s"] else [] 
+    ]
+
+cutCommands = concatMap (processKey . addPrefix) 
+    [ (regk++dc, da)
+    | (regk, ta) <- [("", feedReg "")]++ fmap (\(a,b) -> ("' "++a++" ", b)) (regKeys ++ [regPromptKey "Cut windows to register:"])
+    , (dc, da) <- [ (fk, do
+                        ls <- xls
+                        ta $ \t -> cut t ls
+                        return ())
+                  | (fk, xls) <- [ ("d "++mk, xls')
+                                 | (mk, xls') <- motionKeyWindowSelection
+                                                ++
+                                                structKeys "d"]
+                                 ++
+                                 [ ("S-q", groupList 1) ]
+                                 ++
+                                 [ ("C-q", columnList 1) ]
+                  ]
+                  ++
+                  [ ("q", do
+                       gs <- getSelectedWindowStack
+                       ta $ \t -> cut t (W.integrate' gs)
+                       return ())
+                  ]
+                  ++
+                  [ (fks, do
+                      ta $ \t -> sequence_ $ take n $ repeat $ removeCurrentWorkspace' t
+                      return ())
+                  | (fks, n) <- [ (wfk, n')
+                                | (nk, n') <- numberKeys
+                                , wfk <- ["d "++nk++" s"] ++ if n' == 1 then ["d s"] else [] ]
+                                ++
+                                [ ("C-S-q", 1) ]
+                  ]
+    ]
+
+markCommands = concatMap (processKey . addPrefix) $
+    [ (kstr, da)
+    | (regk, ta) <- regKeys ++ [regPromptKey "Put windows into register:"]
+    , (kstr, da) <- [ ("' "++regk++" m "++mk, do
+                            ls <- xls
+                            ta $ \t -> mapM_ (addTag t) ls
+                            return ())
+                    | (mk, xls) <- motionKeyWindowSelection
+                                   ++
+                                   structKeys "m"
+                                   ++
+                                   wssKeys]
+                    ++
+                    [ ("S-m "++regk, do
+                         gs <- getSelectedWindowStack
+                         ta $ \t -> mapM_ (addTag t) (W.integrate' gs)
+                         return ())
                     ]
     ]
-    -- mark interface
-    -- marking uses the selection interface as well (thus supporting group mark)
     ++
-    [ ("M-"++modk++" "++tk, gt a) 
-    | (tk, gt) <- [(charToKeyStroke k, flip id [k]) | k <- typeablesNoSlashNorQuote] 
-                  ++
-                  [("/", \a -> initMatches >>= \r -> tagPrompt (myXPConfig r) {searchPredicate = prefixSearchPredicate} a)]
-    , (modk, a) <- [
-          ("m", \t -> getSelectedWindowStack >>= mapM_ (addTag t) . W.integrate')
-          -- automatically minimizing the selected windows on marking
-        , ("S-m", \t -> getSelectedWindowStack >>= \s -> do
-                let ls = W.integrate' s
-                mapM_ (addTag t) ls 
-                minimizeWindows ls
-          )
-        , ("'", \t -> cycleMatching (hasTagQuery t) Next)
-        -- , ("S-'", \t -> cycleMatchingOrDo (hasTagQuery t <&&> isInCurrentWorkspace) Next shiftWindowsHere (return ()))
-        -- the shift motion also selects all the recalled windows (convenient if you need to do chained action e.g. move to a new group)
-        , ("S-'", \t -> orderedWindowsMatchingPredicate (hasTagQuery t) >>= \ws -> do
-                                markWindowsSelection ws
-                                shiftWindowsHere ws
-                                enterExtendedSelectionMode
-          )
-        , ("C-'", \t -> orderedWindowsMatchingPredicate (hasTagQuery t) >>= focusNextKillWindows)
-        ] 
+    [ ("u "++mk, do
+        ls <- xls
+        mapM_ unTag ls)
+    | (mk, xls) <- motionKeyWindowSelection
+                   ++
+                   structKeys "u"
+                   ++
+                   wssKeys]
+    ++
+    [ ("S-u", do
+           gs <- getSelectedWindowStack
+           mapM_ unTag (W.integrate' gs))
     ]
-    -- simulating the back reference as in vim
+
+pasteCommands = concatMap (processKey . addPrefix)
+    [ (regk++cmd, ta (paste i np) >> return ())
+    | (cmd, i, np) <- [("p", False, True)
+                      -- , ("S-p", False, False)
+                      , ("g p", True, True)
+                      -- , ("g S-p", True, False)
+                      ]
+    , (regk, ta) <- [("", feedReg "")]++ fmap (\(a,b) -> ("' "++a++" ", b)) (regKeys ++ [regPromptKey "Cut windows to register:"]) 
+    ]
+visualCommands = 
+    [ ("M-v", toggleVisualMode Win)
+    , ("M-S-v", toggleVisualMode Row)
+    , ("M-C-v", toggleVisualMode Col)
+    ]
+
+cloneCommands = concatMap (processKey . addPrefix) $
+    [ ("c "++(filterKey g), construct g)
+    | g <- allTaskGroupsWithFilterKey ["c"] ]
     ++
-    [ ("M-' "++k, nextMatch History $ return True) | k <- ["M-'", "'"] ]
+    -- m-c <number> <group> allows you to create multiple copies of a given task group
+    -- m-c <number> <number> creates the multiple copies of the current group
+    [ ("c "++nk++" "++(filterKey g), sequence_ $ take n $ repeat (construct g))
+    | (nk, n) <- numberKeys
+    , g <- allTaskGroupsWithFilterKey [nk]
+    ]
+
+historyCommands =
+    [ ("M-"++m++dirk++ms, jumpWindowHistory dir p)
+    | (dirk, dir) <- [(historyBackKey, Prev), (historyForwardKey, Next)]
+    , (m, ms, p) <- [ ("", "", alwaysTrue) ] 
+                    ++
+                    -- the task group filtered history navigation is experimental -- it can changes the order of history in complex ways
+                    [ ("S-"++sm, " "++(filterKey g), smp <&&> filterPredicate g) 
+                    | g <- allTaskGroupsWithFilterKey ["M-S-o", "M-S-i"]
+                    , (sm, smp) <- [("", alwaysTrue)] ]
+                    ++
+                    -- inter group stack level
+                    [ ("C-", "", toggleGroupPredicate)
+                    -- within the group stack
+                    , ("M1-", "", toggleWithinGroupPredicate)
+                    -- within different task group
+                    , ("C-M1-", "", toggleTaskGroupPredicate)]
+    ]
+
+-- the layout commands are there to provide convenient access
+layoutCommands = 
+    [ ("C-S-"++k, sendMessage $ G.Modify $ G.moveToGroupAt n)
+    | (k, n) <- columnKeys]
     ++
-    [ ("M-S-' "++k, withNextMatchOrDo History (return True) (\w -> shiftWindowsHere [w]) (return ())) | k <- ["M-S-'", "'"]]
+    [ ("M1-S-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.insertAt n)
+    | (k, n) <- tabKeys]
     ++
-    [ -- launcher
-      ("M-z", initMatches >>= mkTaskPrompt . myXPConfigWithQuitKey (myModMask, xK_z))
-    , ("M-y", initMatches >>= \r -> mkFMCPrompt (myXPConfigWithQuitKey (myModMask, xK_y) r) {
-            autoComplete = Just 0
-      })
-    -- }}}
-    ----- Layout hotkeys-- {{{
-    -- Layoutgroups
-    , ("M-<Space>", sendMessage $ G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage NextLayout)
+    [ ("M1-C-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith n)
+    | (k, n) <- tabKeys]
+    ++
+    [ ("M-<Space>", sendMessage $ G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage NextLayout)
     , ("M-S-<Space>", nextOuterLayout)
-    {-, ("M-g M-0", sendMessage $ G.Modify G.focusMaster)-}
-    {-, ("M1-S-4", sendMessage $ G.Modify G.focusLast)-}
-    {-, ("M1-C-S-4", sendMessage $ G.Modify G.swapWithLast)-}
-    ]
-    -- within GroupStack manipulations
-    ++ 
-    [ (af++mm++mf++(fromJust $ subgroupIndexToSymbol n), a)
-    {-| n <- filter (/=5) [0..8]-}
-    | n <- [0..(length subgroupSymbolSequence - 1)]
-    , (af, mm, mf, a) <- [
-          ("", "M1-", "", do
-              -- let's check if the current window is already focused for the given position
-              mbs <- getBaseCurrentStack
-              case mbs of
-                   Just s@(W.Stack _ u _)
-                      | n == length u -> nextMatch History (isOneOfWindows $ W.integrate s)
-                      | otherwise -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt n
-                   _ -> return ()
-          ) 
-        -- we cannot easily determine the last index for the current tab
-        -- , ("", "C-", do
-        --     gs <- G.getCurrentGStack
-        --     case fmap G.baseCurrent gs of
-        --          Just (G.Leaf (Just s@(W.Stack f u d)))
-        --             | n == length u -> withNextMatchOrDo History toggleWithinGroupPredicate (\w -> do
-        --                     -- find the index inside the stack
-        --                     case break (==w) (W.integrate s) of
-        --                          (bf, _:_) -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith $ length bf
-        --                          _ -> return ()
-        --                 ) (return ())
-        --             | otherwise -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith n
-        --          _ -> return ()
-        --   )
-        , ("", "M1-", "C-", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith n)
-        , ("", "M1-", "S-", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.insertAt n)
-        ]
-        ++
-        -- m-d <nubmer> would refer to killing of the tab directly
-        [
-          ("M-d ", mm', "", do
-              ls <- getBaseCurrentWindows
-              if n < length ls then focusNextKillWindow (ls !! n)
-                               else return ()
-          ) | mm' <- ["", "M1-"]
-        ]
-    ]
-    -- inter GroupStack manipulations
-    ++ 
-    [ (af++"C-"++mf++(fromJust $ subgroupIndexToSymbol n), a)
-    | n <- [0..(length subgroupSymbolSequence - 1)]
-    , (af, mf, a) <- [
-          ("", "", do
-                gs <- G.getCurrentGStack
-                case gs of
-                     Just (G.Node (W.Stack f u d))
-                        | n == length u -> toggleGroup
-                        | otherwise -> sendMessage $ G.Modify $ G.focusGroupAt n
-                     _ -> return ()
-          ) 
-        , ("", "S-", sendMessage $ G.Modify $ G.moveToGroupAt n)
-        , ("M-d ", "", do
-            gs <- G.getCurrentGStack
-            case fmap (maybe [] G.flattened . G.groupAt n) gs of
-                 Just ls -> focusNextKillWindows ls
-                 _ -> return ()
-          )
-        ]]
-    ++ 
-    {-[ ("M-l", sendMessage $ G.Modify G.focusDown)-}
-    {-, ("M-h", sendMessage $ G.Modify G.focusUp)-}
-    [ ("M-k", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusGroupUp)
-    , ("M-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.focusGroupDown)
-    , ("M-h", sendMessage $ G.Modify G.focusGroupUp)
-    , ("M-l", sendMessage $ G.Modify G.focusGroupDown)
-
-    , ("M-p", focusPreviousTab)
-    , ("M-n", focusNextTab)
-    -- simplifying the process by not providing keys for shifting a tab page to adjacent columns
-    -- since by user convention it doesn't seem like a thing that I tend to use
-    , ("M-S-p", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapUp)
-    , ("M-S-n", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapDown)
-
+    , ("M-S-b", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapUp)
+    , ("M-S-w", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapDown)
     , ("M-C-S-k", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupUp)
     , ("M-C-S-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupDown)
     , ("M-C-S-h", sendMessage $ G.Modify G.swapGroupUp)
     , ("M-C-S-l", sendMessage $ G.Modify G.swapGroupDown)
-    , ("M-C-S-s", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.splitGroup)
-
-    -- remodel of the transfer protocol: we move the selected tabs to the given direction
-    -- extract the selected tabs in the current group
-    -- if it's just a movement, then use shiftHere, with priority given to the currently focused tab
-    -- if it's a split, then use applygstack to reassemble the layout
-    {-, ("M-S-h", G.moveSubGroupToGroupUp)-}
-    {-, ("M-S-l", G.moveSubGroupToGroupDown)-}
-
-    -- , ("M-S-h", sendMessage $ G.Modify $ G.moveToGroupUp True)
-    -- , ("M-S-l", sendMessage $ G.Modify $ G.moveToGroupDown True)
-    -- , ("M-S-k", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveToGroupUp True)
-    -- , ("M-S-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveToGroupDown True)
     , ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp s)
     , ("M-S-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsDown s)
     , ("M-S-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsUp s)
@@ -2887,51 +2778,35 @@ myKeys toggleFadeSet =
     , ("M-C-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsToNewGroupDown s)
     , ("M-C-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToNewGroupUp s)
     , ("M-C-l", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToNewGroupDown s)
-    , ("M-q", getSelectedWindowStack >>= focusNextKillWindows . W.integrate')
-    , ("M-S-q", getBaseCurrentWindows >>= focusNextKillWindows)
-    , ("M-C-q", G.getCurrentGStack >>= maybe (return ()) (focusNextKillWindows . maybe [] G.flattened . G.current))
-    ]
-    ++
-    [
-      ("M-v", orderedWindowsMatchingPredicate (isInCurrentWorkspace <&&> windowIsSelectedQuery) >>= shiftWindowsHere >> enterExtendedSelectionMode)
-    -- move all selected windows (in all workspaces
-    , ("M-S-v", orderedWindowsMatchingPredicate windowIsSelectedQuery >>= shiftWindowsHere >> enterExtendedSelectionMode)
     , ("M-s", sortWindowsWithinGroupStacks)
     -- a permanent sticky layout that will automatically move any new window into the corresponding task group
     , ("M-S-s", do
         h <- getCurrentWorkspaceHandle 
         toggleAutoArrangeWorkspace h)
     -- toggle insert older
-    -- , ("M-C-x", toggleInsertOlder >> runLogHook)
+    , ("M-C-x", toggleInsertOlder >> runLogHook)
     -- force insert older, while remembering the old toggle
     , ("M-M1-s", toggleInsertOlderForce)
     -- recover for the old toggle
     , ("M-M1-S-s", toggleInsertOlderRecover)
-    , ("M-C-c", sendMessage $ G.Modify G.collapse)
-
     , ("M-S-,", sendMessage $ G.ToEnclosing $ SomeMessage zoomOut)
     , ("M-S-.", sendMessage $ G.ToEnclosing $ SomeMessage zoomIn)
     , ("M-\\", sendMessage $ G.ToEnclosing $ SomeMessage zoomReset)
     , ("M--", sendMessage $ G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage zoomOut)
     , ("M-S-=", sendMessage $ G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage zoomIn)
     , ("M-=", sendMessage $ G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage zoomReset)
-    {-, ("M-S-m", sendMessage $ G.Modify G.focusGroupMaster)-}
     , ("M-S-<Return>", sendMessage $ G.Modify G.swapGroupMaster)
     , ("M-<Return>", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupMaster)
-    {-, ("M-C-,", sendMessage $ G.ToEnclosing $ SomeMessage $ IncMasterN 1)-}
-    {-, ("M-C-.", sendMessage $ G.ToEnclosing $ SomeMessage $ IncMasterN (-1))-}
-    , ("M-C-m", getSelectedWindowStack >>= minimizeWindows . W.integrate')
-    , ("M-C-u", restoreMinimizedWindowAndSelect)
-    , ("M-C-S-u", restoreMinimizedWindowsAndSelect >> enterExtendedSelectionMode)
     , ("M-<Tab>", switchFocusFloat)
     , ("M-S-<Tab>", switchFocusFloat)
-    -- }}}
-    ----- Workspace hotkeys-- {{{
-    -- for Dynamic Workspaces
-    {-, ("M-<Backspace>", clearWorkspacesAfter >> return ())-}
-    , ("M-C-S-q", removeCurrentWorkspace)
-    , ("M-a c", initMatches >>= \r -> renameWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep})
+    -- cycling of the window styles
+    , ("M-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Next)
+    , ("M-S-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Prev)
     ]
+
+
+promptCommands = 
+    [ ("M-a c", initMatches >>= \r -> renameWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep}) ]
     ++
     [ ("M-"++mf++"a "++af, initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos action)
     | (mf, action, prompt) <- [ ("", windows . W.greedyView, "workspace")
@@ -2945,22 +2820,82 @@ myKeys toggleFadeSet =
                    , ("S-a", Last) ]
     ]
     ++
-    [ 
-    -- for cycleing through the set
-      ("M-6", lastWorkspaceTag >>= windows . W.view )
+    [ ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfig r) { 
+              changeModeKey = xK_VoidSymbol
+            , searchPredicate = repeatedGrep
+            , promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
+                  ((myModMask, xK_r), quit)
+                , ((myModMask, xK_b), setInput "vb " >> endOfLine)
+                , ((myModMask, xK_c), setInput "calc " >> endOfLine)
+                , ((myModMask, xK_z), setInput "tk " >> endOfLine)
+                , ((myModMask, xK_d), do
+                        str <- getInput
+                        let ls = ["sdcv-Collins ", "sdcv-Moby ", "sdcv-modernChinese", "sdcv-bigChinese"]
+                            nstr = case findIndex (`isPrefixOf` str) ls of 
+                                       Just i | (ls !! i) == str -> ls !! ((i+1) `mod` (length ls))
+                                              | otherwise -> ls !! i
+                                       _ -> head ls
+                        setInput nstr
+                        endOfLine
+                   )
+            ]})
+    , ("M-y", initMatches >>= \r -> mkFMCPrompt (myXPConfigWithQuitKey (myModMask, xK_y) r) {
+            autoComplete = Just 0
+      })
+    -- xmonad commands
+    , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
+    ]
+    -- search interface
+    ++
+    [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow a)
+    | (mf, p, a) <- [ ("", "Go to window: ", deminimizeFocus)
+                    , ("S-", "Bring window: ", shiftWindowsHere . wrapList)
+                    , ("C-", "Delete window: ", focusNextKillWindow)
+                    ]
+    ]
+
+
+miscCommands toggleFadeSet = 
+    [ ("M-<Esc>", exitToNormalMode)
+    , ("M-<L>", withFocused $ keysMoveWindow (-10,0))
+    , ("M-<R>", withFocused $ keysMoveWindow (10,0))
+    , ("M-<U>", withFocused $ keysMoveWindow (0,-10))
+    , ("M-<D>", withFocused $ keysMoveWindow (0,10))
+    , ("M-S-<L>", withFocused $ keysAbsResizeWindow (-10,0) (0,0))
+    , ("M-S-<R>", withFocused $ keysAbsResizeWindow (10,0) (0,0))
+    , ("M-S-<U>", withFocused $ keysAbsResizeWindow (0,-10) (0,0))
+    , ("M-S-<D>", withFocused $ keysAbsResizeWindow (0,10) (0,0))
+    -- }}}
+    , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+    , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+    ----- wallpaper invoke -- {{{
+    , ("M-z", initMatches >>= \r -> mkWPPrompt toggleFadeSet (myXPConfigWithQuitKey (myModMask .|. controlMask, xK_Return) r) {
+          autoComplete = Just 0
+        , searchPredicate = repeatedGrep
+    })
+    -- kill command (note this is different from the standard cut
+    , ("M-x", getSelectedWindowStack >>= focusNextKillWindows . W.integrate')
+    , ("M-M1-q", spawn myRestartCmd)
+    -- we should also kill the processes and then exit
+    , ("M-M1-S-q", spawn myKillCmd >> io (exitWith ExitSuccess))
+    , ("<F10>", spawn "amixer get Master | fgrep '[on]' && amixer set Master mute || amixer set Master unmute")
+    , ("<F11>", spawn $ "amixer set Master 5-; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
+    , ("<F12>", spawn $ "amixer set Master 5+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
+    ]
+
+workspaceCommands = 
+    [ ("M-6", lastWorkspaceTag >>= windows . W.view )
     , ("M-S-6", lastWorkspaceTag >>= windows . W.shift)
     , ("M-C-6", lastWorkspaceTag >>= swapWith)
     , ("M-4", allWorkspaceTags >>= toggleTag . last >>= windows . W.view)
     , ("M-S-4", allWorkspaceTags >>= toggleTag . last >>= windows . W.shift)
     , ("M-C-4", allWorkspaceTags >>= toggleTag . last >>= swapWith)
-    {-, ("M1-6", toggleWithinGroup)-}
-    , ("C-M1-6", toggleTaskGroup)
-    , ("M-C-n", doTo Next validWSType myWorkspaceSort (windows . W.greedyView))
-    , ("M-C-p", doTo Prev validWSType myWorkspaceSort (windows . W.greedyView))
-    -- , ("M-C-S-n", doTo Next validWSType myWorkspaceSort (windows . W.shift))
-    -- , ("M-C-S-p", doTo Prev validWSType myWorkspaceSort (windows . W.shift))
-    , ("M-C-S-p", modSwapTo Prev)
-    , ("M-C-S-n", modSwapTo Next)
+    , ("M-[", doTo Prev validWSType myWorkspaceSort (windows . W.greedyView))
+    , ("M-]", doTo Next validWSType myWorkspaceSort (windows . W.greedyView))
+    , ("M-S-[", doTo Prev validWSType myWorkspaceSort (windows . W.shift))
+    , ("M-S-]", doTo Next validWSType myWorkspaceSort (windows . W.shift))
+    , ("M-C-[", modSwapTo Prev)
+    , ("M-C-]", modSwapTo Next)
     -- }}}
     ----- Loghook-- {{{
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
@@ -2974,24 +2909,284 @@ myKeys toggleFadeSet =
                 , ("C-", \t -> toggleTag t >>= swapWith)
                 , ("C-S-", moveGroupStackToWorkspace)] 
     , t <- quickWorkspaceTags]
--- }}}
------ QuickFindWindow-- {{{
-    -- zip through all the possible combinations of keys
-    -- finding the title of a window (a bit triky)
-    -- ++
-    -- [ ("M-"++m++"f "++k, cycleInCurrWSOfPropMatchingPrefix Next p c casesens)
-    -- | (m, p, casesens) <- zip3 ["", "S-"] [title, className] [True, False]
-    -- , (k, c) <- fmap (\c -> ([c], c)) ['a'..'z'] 
-    --             ++
-    --             fmap (\c -> ("S-"++[c], toUpper c)) ['a'..'z']]
+
+-- visual mode we need a new datastructure to store the selections
+-- the first bool stores the active selection while the second stores the passive ones
+-- we need to pass a selection mode into the function to select the right windows
+data VisualMode = Win | Row | Col deriving (Show, Read, Eq)
+data XMonadMode = Normal | Visual VisualMode deriving (Show, Read, Eq)
+data XMonadModeStorage = XMS XMonadMode deriving Typeable
+instance ExtensionClass XMonadModeStorage where
+    initialValue = XMS Normal
+
+exitToNormalMode = do
+    -- clear the m-o m-i marks
+    clearAllMarks
+    inv <- isInVisualMode
+    if inv then exitVisualMode
+           else clearAllSelections >> refresh
+
+data VisualSelections = VisualSelections (S.Set Window, S.Set Window) deriving (Typeable, Read, Show)
+instance ExtensionClass VisualSelections where
+    initialValue = VisualSelections (S.empty, S.empty)
+    extensionType = PersistentExtension
+
+-- the beginning of the window and the end of the window
+data VisualModeMarker = VisualModeMarker (Maybe ((Window, Window), (Window, Window))) deriving (Typeable, Read, Show)
+instance ExtensionClass VisualModeMarker where
+    initialValue = VisualModeMarker Nothing
+    extensionType = PersistentExtension
+
+toggleVisualMode mode = do
+    XMS m <- XS.get
+    case m of
+         Visual mode' | mode' == mode -> exitVisualMode
+         _ -> enterVisualMode mode
+
+allDiff a b = S.difference  (S.union a b) (S.intersection a b)
+enterVisualMode mode = withFocused $ \f -> do
+    XS.put (XMS (Visual mode)) 
+    -- clear marker
+    XS.put $ VisualModeMarker Nothing
+    -- clear active selections first
+    VisualSelections (ac, pass) <- XS.get
+    XS.put $ VisualSelections (S.empty, pass)
+    -- update 
+    visualModeUpdateEndMarker f
+    refresh
+visualModeUpdateToggleSet ls = do
+    VisualSelections (ac, pass) <- XS.get
+    XS.put $ VisualSelections $ (allDiff ac $ S.fromList ls, pass)
+maybeToMaybe = maybe Nothing
+visualModeUpdateEndMarker w = do
+    XMS mode <- XS.get
+    case mode of
+         Visual vm -> do
+                -- we have to obtain the new selection range
+                wins <- allOrderedWindows
+                let rangeInGStacks (G.Leaf s) = (w, w)
+                    rangeInGStacks (G.Node s) = 
+                        case find (w `elem`) $ fmap G.flattened ls of 
+                              Just fls | not (null fls) -> (head fls, last fls)
+                              _ -> (w, w) 
+                            where ls = W.integrate s
+                    computeDiff (a, b) (c, d) =
+                        let gi = flip elemIndex wins
+                        in case (gi a, gi b, gi c, gi d) of
+                             (Just ai, Just bi, Just ci, Just di) -> 
+                                let (fbi', fei') = head $ sortBy (\(xi, yi) (wi, zi) -> compare (abs $ wi - zi) (abs $ xi - yi)) $ [(ai, ci), (ai, di), (bi, ci), (bi, di)]
+                                    (fbi, fei) = if fei' >= fbi' then (fbi', fei') else (fei', fbi')
+                                in S.fromList $ drop fbi $ take (fei + 1) wins
+                             _ -> S.empty
+                (wb, we) <- case vm of
+                                 Win -> return (w, w)
+                                 -- row uses the bases function
+                                 Row -> fmap (maybeToMaybe G.bases) G.getCurrentGStack >>= return . maybe (w, w) rangeInGStacks
+                                 Col -> G.getCurrentGStack >>= return . maybe (w, w) rangeInGStacks
+                VisualSelections (ac, pass) <- XS.get
+                VisualModeMarker mm <- XS.get 
+                case mm of
+                     Just ((bb, be), (eb, ee)) -> do
+                         XS.put $ VisualSelections (allDiff ac $ allDiff nws ows, pass)
+                         XS.put $ VisualModeMarker $ Just ((bb, be), (wb, we)) 
+                        where ows = computeDiff (bb, be) (eb, ee)
+                              nws = computeDiff (bb, be) (wb, we)
+                     Nothing -> do
+                         XS.put $ VisualSelections (computeDiff (wb, we) (wb, we), pass)
+                         XS.put $ VisualModeMarker $ Just ((wb, we), (wb, we)) 
+         _ -> return ()
+
+exitVisualMode = do
+    XS.put (XMS Normal) 
+    -- lets commit all active selections to the passive ones
+    VisualSelections (ac, pass) <- XS.get
+    XS.put $ VisualSelections (S.empty, allDiff ac pass)
+    refresh
+isInVisualMode = XS.get >>= \(XMS m) -> case m of
+                                             Visual _ -> return True
+                                             _ -> return False
+ifInVisualMode a b = isInVisualMode >>= \inv -> if inv then a else b
+windowIsSelected w = do
+    VisualSelections (ac, pass) <- XS.get 
+    return $ S.member w $ allDiff ac pass
+windowIsSelectedQuery = ask >>= liftX . windowIsSelected
+deleteWindowsSelection [] = return ()
+deleteWindowsSelection ls = do
+    VisualSelections (ac, pass) <- XS.get 
+    let ft = S.filter (not . (`elem` ls))
+    XS.put $ VisualSelections (ft ac, ft pass)
+markWindowsSelection ls = do
+    VisualSelections (ac, pass) <- XS.get 
+    XS.put $ VisualSelections (S.filter (not . (`elem` ls)) ac, foldr S.insert pass ls)
+clearAllSelections = XS.put $ VisualSelections (S.empty, S.empty)
+
+getSelectedWindowStack' = do
+    mf <- gets (W.peek . windowset)
+    inv <- isInVisualMode
+    VisualSelections (ac, pass) <- XS.get 
+    let currs = allDiff ac pass
+        ft = flip S.member currs
+        filterBase fil os@(G.Leaf (Just (W.Stack f u d)))
+           | fil f = if length fu == length u && length fd == length d && length fu + length fd > 0 
+                       then (Just os, Just (init ols, last ols))
+                       else (Just $ G.Leaf $ Just $ W.Stack f fu fd, Nothing)
+           | not (null fd) = (Just $ G.Leaf $ Just $ W.Stack (head fd) fu (tail fd), Nothing)
+           | not (null fu) = (Just $ G.Leaf $ Just $ W.Stack (head fu) (tail fu) [], Nothing)
+           | otherwise = (Nothing, Nothing)
+              where fu = filter fil u
+                    fd = filter fil d
+                    ols = G.flattened os
+        filterBase fil (G.Node (W.Stack f u d)) = 
+            let f' = pl [f]
+                u' = pl u
+                ugs = fst $ unzip u'
+                d' = pl d
+                dgs = fst $ unzip d'
+                pl = fmap (\(a, b) -> (fromJust a, b)) . filter (isJust . fst) . fmap (filterBase fil)
+                mvs = catMaybes $ snd $ unzip $ reverse $ (reverse u')++f'++d'
+                mvws = concatMap fst mvs
+                lw = snd $ head mvs
+                mops = if null mvws then Nothing else Just (mvws, lw)
+            in case (f', ugs, dgs) of
+                    ([(fg, _)], _, _) -> (Just $ G.Node $ W.Stack fg ugs dgs, mops)
+                    ([], _, dh:dl) -> (Just $ G.Node $ W.Stack dh ugs dl, mops)
+                    ([], uh:ul, _) -> (Just $ G.Node $ W.Stack uh ul dgs, mops)
+                    _ -> (Nothing, mops)
+        filterBase _ _ = (Nothing, Nothing)
+    mbases <- fmap (maybeToMaybe G.bases) G.getCurrentGStack 
+    let mb = if inv then mbases else maybeToMaybe G.current mbases
+    return $ if isNothing mb 
+               then (Nothing, Nothing)
+               else let bs = fromJust mb
+                    in case (filterBase ft bs, mf) of
+                        ((Just gs, ops), _) -> (G.toZipper gs, ops)
+                        (_, Just f) -> (W.differentiate [f], Nothing)
+                        _ -> (Nothing, Nothing)
+
+getSelectedWindowStack = fmap fst getSelectedWindowStack'
+
+applySelectedWindowStack :: Bool -> (Maybe (W.Stack Window) -> X ()) -> X ()
+applySelectedWindowStack reversal fun = do
+    ss <- getSelectedWindowStack'
+    let rev (W.Stack f u d) = if reversal then W.Stack f d u else W.Stack f u d
+        deselect (W.Stack f [] []) = deleteWindowsSelection [f]
+        deselect _ = return ()
+    case ss of
+         (Just os@(W.Stack f _ _), Just (mvs, mf)) -> do
+                                           let wins = W.integrate os
+                                               remains = filter (not . (`elem` mvs)) wins
+                                           -- temporarily move those windows to the scratchpad wokr
+                                           curr <- gets (W.currentTag . windowset)
+                                           windows $ \s -> W.focusWindow mf $ foldr (W.shiftWin scratchpadWorkspaceTag) s mvs
+                                           fun $ Just $ W.Stack mf [] [] 
+                                           -- move the remaining windows to the temp workspace
+                                           windows $ \s -> 
+                                                let s' = foldr (W.shiftWin scratchpadWorkspaceTag) s remains
+                                                    s'' = foldr (W.shiftWin curr) s' wins
+                                                in W.focusWindow f s''
+         (Just os, _) -> let s = rev os in deselect s >> fun (Just s)
+         _ -> return ()
+    -- refresh 
+    refresh
+
+paste invertInsert normalP register = do
+    InsertOlderToggle t <- XS.get
+    wins <- case register of 
+                 -- use the default register
+                 "" -> do
+                     -- first get the register content
+                     -- we need to push the windows in the reverse direction
+                     let mv t rep nrep = case t of
+                             "\"" -> if not (null rep) && filter (not . (`elem` nrep)) rep == [] 
+                                        -- keep on moving
+                                        then mvWindows "9" mv []
+                                        else return rep
+                             "1" -> mvWindows "\"" mv rep
+                             _ -> mvWindows (show $ (read t)-1) mv rep
+                     mvWindows "9" mv []
+                 _ -> orderedWindowsMatchingPredicate (hasTagQuery register) 
+    if not (null wins)
+       then do
+            markWindowsSelection wins
+            let t' = if invertInsert then not t else t
+            case (t', normalP) of
+                 (False, True) -> shiftWindowsHereAndFocusLast True (Just (head wins)) wins
+                 (False, False) -> shiftWindowsHereAndFocusLast False (Just (head wins)) wins
+                 (True, True) -> shiftWindowsHereAndFocusLast True Nothing wins
+                 (True, False) -> shiftWindowsHereAndFocusLast False Nothing wins
+       else return ()
+
+-- a register of "" means no register shall be used (in that case we just push into the default list of registers
+cut register wins = do
+    minimizeWindows wins
+    if register /= ""
+       -- put these windows into that register
+       then putWindowsIntoRegister register wins 
+       else let mv t rep _ = case t of
+                    -- we should check if this is the only tag the windows have
+                     "9" -> filterM (\w -> do
+                            ts <- getTags w
+                            return $ ts == ["9"] 
+                         ) rep >>= focusNextKillWindows
+                     _ -> mvWindows (show $ (read t)+1) mv rep 
+            -- pushing these windows into 1, 1->2, 9 out of the memory
+            in mvWindows "1" mv wins 
+    putWindowsIntoRegister "\"" wins 
+
+mvWindows nr fun wins = do
+    rep <- orderedWindowsMatchingPredicate (hasTagQuery nr) 
+    mapM_ (delTag nr) rep
+    mapM_ (addTag nr) wins
+    fun nr rep wins
+
+putWindowsIntoRegister register wins = do
+    orderedWindowsMatchingPredicate (hasTagQuery register) >>= mapM_ (delTag register) 
+    mapM_ (addTag register) wins
+
+
+-- make the keystrokes easier to type
+processKey (k, a) = 
+    let keys = words k
+        -- find all adjacent pairs which have the same key (and append them with M-)
+        pks ks = case findIndex (isPrefixOf "M-") ks of
+                     Just i | i + 1 < length ks -> case (fromJust $ stripPrefix "M-" wi, fromMaybe wa $ stripPrefix "M-" wa, splitAt i ks) of
+                                                        -- attach both keys with the prefix
+                                                        (a, b, (bf, _:_:af)) | a == b -> bf ++ (wi:(pks (wi:af)))
+                                                                             | otherwise -> bf ++ (wi:(pks (wa:af)))
+                                                        _ -> ks
+                                        where wi = ks !! i
+                                              wa = ks !! (i+1)
+                     _ -> ks
+        p = joinStr " " (pks keys)
+    in [(k,a)] ++ if p /= k then [(p,a)] else []
+
+addPrefix (k, a) = ("M-"++k, a)
+ 
+
+myKeys toggleFadeSet = 
+    visualCommands
     ++
-    [ ("M-;", playLastFindFunction Next)
-    , ("M-,", playLastFindFunction Prev)]))
--- }}}
-        where cycleInCurrWSOfPropMatchingPrefix dir p c casesens =  
-                  let trans = if casesens then id else toLower in
-                  cycleMatching ((fmap ((==) (trans c) . trans . head) p) <&&> isInCurrentWorkspace) dir
-              
+   (appendActionWithException (\_ -> ifInVisualMode exitVisualMode (return ()))  motionKeyCommands
+    $
+    appendActionWithException saveLastCommand [ ("M-.", getLastCommand >>= id) ] 
+    $
+    cutCommands
+    ++
+    pasteCommands
+    ++
+    markCommands
+    ++
+    cloneCommands
+    ++
+    layoutCommands
+    ++
+    promptCommands
+    ++
+    historyCommands
+    ++
+    miscCommands toggleFadeSet
+    ++
+    workspaceCommands)
 -- }}}
 
 myXMonadConfig = defaultConfig { 
