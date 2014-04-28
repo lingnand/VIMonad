@@ -783,8 +783,8 @@ defaultFadeTest floats =
     liftM not doNotFadeOutWindows <&&> fmap not isFocused <&&> (join . asks $ \w -> liftX . io $ S.notMember w `fmap` readIORef floats)
 
 isFocused = ask >>= \w -> liftX $ do
-    mf <- gets (W.peek . windowset)
-    return $ mf == Just w
+    fs <- getFocusStack
+    return $ fmap W.focus fs == Just w
      
 -- toggles whether the given window should be faded out (by toggling its reference in a set
 toggleFadeOut :: Window -> S.Set Window -> S.Set Window
@@ -2003,7 +2003,7 @@ data TaskGroup = TaskGroup { taskGroupName :: String
                              -- ^ the query bool used to filter this group 
                            , localFirst :: Bool
                              -- ^ should any filtering occur on a local workspace first order
-                           , construct :: X ()
+                           , construct :: Maybe Window -> X ()
                              -- ^ hook that gets called when a new window should be replicated; returns True if successfully constructed
                            , launchHook :: ManageHook
                              -- ^ hook that gets called during the first launch of the window (in the managehook)
@@ -2032,8 +2032,6 @@ filterKeyList = fmap (\s-> (if "S-" `isPrefixOf` s then toUpper else toLower) $ 
 
 instance Ord TaskGroup where
     compare t t' = let r = compFilterKeyList (filterKeyList $ filterKey t) (filterKeyList $ filterKey t') in if r == EQ then compare (taskGroupName t) (taskGroupName t') else r
-
-constructInDir construct dir = construct
 
 doSink = ask >>= \w -> liftX (reveal w) >> doF (W.sink w)
 -- doViewShift = doF . liftM2 (.) W.greedyView W.shift
@@ -2067,7 +2065,7 @@ instance Default TaskGroup where
                       , filterKey = ""
                       , filterPredicate = alwaysTrue
                       , localFirst = True
-                      , construct = return ()
+                      , construct = \_ -> return ()
                       , launchHook = idHook
                       -- the default window styles involving
                       , windowStyle = windowStyleFromList [doSink, lowerHalfRectHook]
@@ -2080,7 +2078,10 @@ taskGroups = [
           , filterKey = "b"
           , filterPredicate = className =? "Vimb"
           {-, construct = runShell "vimb \"`tail -n1 ~/.config/vimb/history | cut -d'\t' -f1`\""-}
-          , construct = vbAction ""
+          , construct = \w -> do-- we can trick the system by activating a yP
+                case w of
+                     Just _ -> spawn $ "xdotool key --clearmodifiers y P"
+                     _ -> vbAction ""
           {-, launchHook = ask >>= doF . -}
           -- green
           , colorScheme = mySubTheme { winInactiveColor = "#1d371d"
@@ -2092,7 +2093,7 @@ taskGroups = [
     , def { taskGroupName = "vim"
           , filterKey = "v"
           , filterPredicate = isTerm <&&> (appName =? "vim" <||> fmap (\s -> (" - VIM" `isInfixOf` s) && (not $ isInfixOf "vimpager" s)) title)
-          , construct = runShell "xvim"
+          , construct = \_ -> runShell "xvim"
           -- brown
           , colorScheme = mySubTheme { winInactiveColor = "#372517"
                                      , winActiveColor = "#7f5233"
@@ -2103,7 +2104,7 @@ taskGroups = [
     , def { taskGroupName = "pidgin-buddy"
           , filterPredicate = isPidginBuddyList
           , launchHook = rightPanelHook
-          , construct = mkNamedScratchpad scratchpads "pidgin"
+          , construct = \_ -> mkNamedScratchpad scratchpads "pidgin"
           , windowStyle = windowStyleFromList [rightPanelHook, leftPanelHook, doSink]
           }
       -- pidgin conversation windows
@@ -2111,7 +2112,7 @@ taskGroups = [
     , def { taskGroupName = "pidgin"
           , filterKey = "d"
           , filterPredicate = className =? "Pidgin" <&&> fmap not (propertyToQuery (Role "buddy_list"))
-          , construct = mkNamedScratchpad scratchpads "pidgin"
+          , construct = \_ -> mkNamedScratchpad scratchpads "pidgin"
           , launchHook = (liftX $ do
                 ws <- gets windowset 
                 case W.peek ws of
@@ -2128,7 +2129,7 @@ taskGroups = [
     , def { taskGroupName = "ranger"
           , filterKey = "r"
           , filterPredicate = isTerm <&&> (title =? "ranger" <||> appName =? "ranger")
-          , construct = runTerm "ranger" "ranger" "loader ranger"
+          , construct = \_ -> runTerm "ranger" "ranger" "loader ranger"
           -- yellow
           , colorScheme = mySubTheme { winInactiveColor = "#353119"
                                      , winActiveColor = "#7f7233"
@@ -2139,7 +2140,12 @@ taskGroups = [
     , def { taskGroupName = "zathura"
           , filterKey = "z"
           , filterPredicate = className =? "Zathura"
-          , construct = runShell "zathura"
+          , construct = \mw ->
+              case mw of
+                   Just w -> do
+                       t <- runQuery title w
+                       runShell $ "zathura "++escapeQuery t
+                   _ -> runShell "zathura"
           -- red
           , colorScheme = mySubTheme { winInactiveColor = "#371921"
                                      , winActiveColor = "#7f334a"
@@ -2150,7 +2156,7 @@ taskGroups = [
     , def { taskGroupName = "term"
           , filterKey = "t"
           , filterPredicate = isRecyclableTerm <||> appName =? "xterm"
-          , construct = runTerm "" "xterm" "zsh -i"
+          , construct = \_ -> runTerm "" "xterm" "zsh -i"
           }
       -- notice: group selection that applies to these 'hidden' groups (namely triggered by auto-group when one of the windows is in focus), will still apply to all matched windows
       -- mutt scratchpad singleton
@@ -2166,7 +2172,7 @@ taskGroups = [
     , def { taskGroupName = "mutt"
           , filterKey = "m"
           , filterPredicate = isTerm <&&> (title =? "mutt" <||> appName =? "mutt")
-          , construct = runTerm "mutt" "mutt" "loader mutt"
+          , construct = \_ -> runTerm "mutt" "mutt" "loader mutt"
           }
       -- ranger scratchpads
     {-, def { taskGroupName = "scratchranger"-}
@@ -2199,32 +2205,32 @@ taskGroups = [
           , filterKey = "i"
           , filterPredicate = className =? "jetbrains-idea"
           , localFirst = False
-          , construct = runShell "intellij-idea-ultimate-edition"
+          , construct = \_ -> runShell "intellij-idea-ultimate-edition"
           }
       -- gimp singleton
     , def { taskGroupName = "gimp"
           , filterKey = "S-m"
           , filterPredicate = className =? "Gimp"
           , localFirst = False
-          , construct = runShell "gimp"
+          , construct = \_ -> runShell "gimp"
           }
       -- inkscape (can have multiple documents)
     , def { taskGroupName = "inkscape"
           , filterKey = "k"
           , filterPredicate = className =? "Inkscape"
-          , construct = runShell "inkscape"
+          , construct = \_ -> runShell "inkscape"
           }
       -- libreoffice (can have multiple documents)
     , def { taskGroupName = "libre"
           , filterKey = "l"
           , filterPredicate = fmap (isInfixOf "libreoffice") className
-          , construct = runShell "libreoffice"
+          , construct = \_ -> runShell "libreoffice"
           }
       -- all remaining xterms can be matched in this group
     , def { taskGroupName = "term(...)"
           , filterKey = "S-t"
           , filterPredicate = isTerm
-          , construct = runTerm "" "" "zsh -i"
+          , construct = \_ -> runTerm "" "" "zsh -i"
           }
       -- all remaining windows that share the same class attributes
     , def { filterPredicate = hasSamePropertyAsFocused className }
@@ -2292,7 +2298,7 @@ contextualGroup gs =
         , launchHook = composeAll $ fmap (\g -> filterPredicate g --> launchHook g) gs
         , windowStyle = \dir -> ask >>= liftX . taskGroupOfWindow gs >>= maybe idHook (\g -> (windowStyle g) dir)
         -- we still need to query for the current window group and then perform on absence based upon that... EXPENSIVE!
-        , construct = withFocused $ \w -> taskGroupOfWindow gs w >>= maybe (return ()) (\g -> construct g)
+        , construct = \_ -> withFocused $ \w -> taskGroupOfWindow gs w >>= maybe (return ()) (\g -> (construct g) (Just w))
         }
 
 
@@ -2552,7 +2558,7 @@ motionKeys =
                       target = t
                     , toggleList = Just wins
                     , searchFunction = Just move
-                    , triggerOnNothing = Just $ construct g
+                    , triggerOnNothing = Just $ (construct g) Nothing
                 }
       )
     | g <- allTaskGroupsWithFilterKey ["c"]
@@ -2716,20 +2722,16 @@ pasteCommands = concatMap (processKey . addPrefix)
     , (regk, ta) <- [("", feedReg "")]++ fmap (\(a,b) -> ("' "++a++" ", b)) (regKeys ++ [regPromptKey "Cut windows to register:"]) 
     ]
 visualCommands = 
-    [ ("M-v", toggleVisualMode Win)
-    , ("M-S-v", toggleVisualMode Row)
-    , ("M-C-v", toggleVisualMode Col)
+    [ ("M-v", enterVisualMode Win)
+    , ("M-S-v", enterVisualMode Row)
+    , ("M-C-v", enterVisualMode Col)
     ]
 
 cloneCommands = concatMap (processKey . addPrefix) $
-    [ ("c "++(filterKey g), construct g)
-    | g <- allTaskGroupsWithFilterKey ["c"] ]
-    ++
-    -- m-c <number> <group> allows you to create multiple copies of a given task group
-    -- m-c <number> <number> creates the multiple copies of the current group
-    [ ("c "++nk++" "++(filterKey g), sequence_ $ take n $ repeat (construct g))
+    [ ("c "++fsk++(filterKey g), sequence_ $ take n $ repeat $ (construct g) Nothing)
     | (nk, n) <- numberKeys
-    , g <- allTaskGroupsWithFilterKey [nk]
+    , fsk <- [nk++" "] ++ if n == 1 then [""] else []
+    , g <- allTaskGroupsWithFilterKey $ ["c"] ++ if n /= 1 then [nk] else []
     ]
 
 historyCommands =
@@ -2827,10 +2829,10 @@ promptCommands =
                   ((myModMask, xK_r), quit)
                 , ((myModMask, xK_b), setInput "vb " >> endOfLine)
                 , ((myModMask, xK_c), setInput "calc " >> endOfLine)
-                , ((myModMask, xK_z), setInput "tk " >> endOfLine)
+                , ((myModMask, xK_k), setInput "tk " >> endOfLine)
                 , ((myModMask, xK_d), do
                         str <- getInput
-                        let ls = ["sdcv-Collins ", "sdcv-Moby ", "sdcv-modernChinese", "sdcv-bigChinese"]
+                        let ls = ["sdcv-Collins ", "sdcv-Moby ", "sdcv-modernChinese ", "sdcv-bigChinese "]
                             nstr = case findIndex (`isPrefixOf` str) ls of 
                                        Just i | (ls !! i) == str -> ls !! ((i+1) `mod` (length ls))
                                               | otherwise -> ls !! i
@@ -2843,7 +2845,7 @@ promptCommands =
             autoComplete = Just 0
       })
     -- xmonad commands
-    , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
+    -- , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
     ]
     -- search interface
     ++
@@ -2932,31 +2934,48 @@ instance ExtensionClass VisualSelections where
     extensionType = PersistentExtension
 
 -- the beginning of the window and the end of the window
-data VisualModeMarker = VisualModeMarker (Maybe ((Window, Window), (Window, Window))) deriving (Typeable, Read, Show)
+data VisualModeMarker = VisualModeMarker (Maybe ((Window, Window), (Window, Window), Window)) deriving (Typeable, Read, Show)
 instance ExtensionClass VisualModeMarker where
     initialValue = VisualModeMarker Nothing
     extensionType = PersistentExtension
 
-toggleVisualMode mode = do
-    XMS m <- XS.get
-    case m of
-         Visual mode' | mode' == mode -> exitVisualMode
-         _ -> enterVisualMode mode
-
 allDiff a b = S.difference  (S.union a b) (S.intersection a b)
 enterVisualMode mode = withFocused $ \f -> do
-    XS.put (XMS (Visual mode)) 
-    -- clear marker
-    XS.put $ VisualModeMarker Nothing
-    -- clear active selections first
-    VisualSelections (ac, pass) <- XS.get
-    XS.put $ VisualSelections (S.empty, pass)
-    -- update 
-    visualModeUpdateEndMarker f
+    XMS m <- XS.get
+    let process win clearls = do
+            XS.put (XMS (Visual mode)) 
+            -- clear marker
+            XS.put $ VisualModeMarker Nothing
+            -- clear active selections first
+            VisualSelections (ac, pass) <- XS.get
+            XS.put $ VisualSelections (S.empty, foldr S.delete pass clearls)
+            -- update 
+            visualModeUpdateEndMarker win
+        clear = do
+            -- depending on the mode we will clear other selections
+            gs <- fmap (if mode == Col then id else maybeToMaybe G.bases) G.getCurrentGStack
+            case gs of
+                 Just (G.Node (W.Stack f u d)) -> return $ concatMap G.flattened $ u++d
+                 _ -> return []
+    case m of
+         Visual mode' | mode' == mode -> exitVisualMode
+                      | otherwise -> do
+                          -- first get the original window
+                          VisualModeMarker m <- XS.get
+                          case m of
+                               Just (_, _, fo) -> return [] >>= process fo >> visualModeUpdateEndMarker f
+                               _ -> clear >>= process f
+         _ -> clear >>= process f
     refresh
+
+-- with the toggle set we check if any of the windows are already selected, only when all of them are selected then we will revert
 visualModeUpdateToggleSet ls = do
     VisualSelections (ac, pass) <- XS.get
-    XS.put $ VisualSelections $ (allDiff ac $ S.fromList ls, pass)
+    let ss = S.fromList ls
+        nac = if S.null (S.difference ss ac)
+                 then S.difference ac ss
+                 else S.union ac ss
+    XS.put $ VisualSelections $ (nac, pass)
 maybeToMaybe = maybe Nothing
 visualModeUpdateEndMarker w = do
     XMS mode <- XS.get
@@ -2986,14 +3005,14 @@ visualModeUpdateEndMarker w = do
                 VisualSelections (ac, pass) <- XS.get
                 VisualModeMarker mm <- XS.get 
                 case mm of
-                     Just ((bb, be), (eb, ee)) -> do
+                     Just ((bb, be), (eb, ee), fo) -> do
                          XS.put $ VisualSelections (allDiff ac $ allDiff nws ows, pass)
-                         XS.put $ VisualModeMarker $ Just ((bb, be), (wb, we)) 
+                         XS.put $ VisualModeMarker $ Just ((bb, be), (wb, we), fo) 
                         where ows = computeDiff (bb, be) (eb, ee)
                               nws = computeDiff (bb, be) (wb, we)
                      Nothing -> do
                          XS.put $ VisualSelections (computeDiff (wb, we) (wb, we), pass)
-                         XS.put $ VisualModeMarker $ Just ((wb, we), (wb, we)) 
+                         XS.put $ VisualModeMarker $ Just ((wb, we), (wb, we), w) 
          _ -> return ()
 
 exitVisualMode = do
@@ -3020,7 +3039,9 @@ markWindowsSelection ls = do
     XS.put $ VisualSelections (S.filter (not . (`elem` ls)) ac, foldr S.insert pass ls)
 clearAllSelections = XS.put $ VisualSelections (S.empty, S.empty)
 
-getSelectedWindowStack' = do
+-- note that due to some restriction the apply selected window stack is now only used on the focused stack 
+-- whereas in the visual mode other operations will still apply to the whole
+getSelectedWindowStack' useFocusStackOnly = do
     mf <- gets (W.peek . windowset)
     inv <- isInVisualMode
     VisualSelections (ac, pass) <- XS.get 
@@ -3054,7 +3075,7 @@ getSelectedWindowStack' = do
                     _ -> (Nothing, mops)
         filterBase _ _ = (Nothing, Nothing)
     mbases <- fmap (maybeToMaybe G.bases) G.getCurrentGStack 
-    let mb = if inv then mbases else maybeToMaybe G.current mbases
+    let mb = if inv && not useFocusStackOnly then mbases else maybeToMaybe G.current mbases
     return $ if isNothing mb 
                then (Nothing, Nothing)
                else let bs = fromJust mb
@@ -3063,11 +3084,11 @@ getSelectedWindowStack' = do
                         (_, Just f) -> (W.differentiate [f], Nothing)
                         _ -> (Nothing, Nothing)
 
-getSelectedWindowStack = fmap fst getSelectedWindowStack'
+getSelectedWindowStack = fmap fst (getSelectedWindowStack' False)
 
 applySelectedWindowStack :: Bool -> (Maybe (W.Stack Window) -> X ()) -> X ()
 applySelectedWindowStack reversal fun = do
-    ss <- getSelectedWindowStack'
+    ss <- getSelectedWindowStack' True
     let rev (W.Stack f u d) = if reversal then W.Stack f d u else W.Stack f u d
         deselect (W.Stack f [] []) = deleteWindowsSelection [f]
         deselect _ = return ()
