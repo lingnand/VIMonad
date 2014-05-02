@@ -59,7 +59,7 @@ splitArg s = case break isSpace s of
                   (a, _) -> (a, "")
 isCmdPrefixOf s c =  not (null s) && isPrefixOf s c
 
-parseArgs s = if null $ trim s then [""] else words s
+parseArgs = splitOn " "
 
 fmcComplFunc s = 
     let (cmd, arg) = splitArg s

@@ -42,13 +42,17 @@ setWorkspaceDir tag f = getWorkspaceDir tag >>= io . setCurrentDirectory . f
 getWorkspaceDir tag = do
     h <- getWorkspaceHandle tag
     WorkspaceDirectories m <- XS.get
+    dd <- defaultDirectory
     case M.lookup h m of
         Nothing -> do
-            dd <- defaultDirectory
             -- need to insert an initial directory into the database
             XS.put $ WorkspaceDirectories $ M.insert h (dd, dd) m 
             return (dd, dd)
-        Just s -> return s
+        Just (od', cd') -> do
+            -- we need to correct the directories again
+            od <- correctDir dd od'
+            cd <- correctDir dd cd'
+            return (od, cd)
 
 getWorkspaceOldDirectory = fmap snd . getWorkspaceDir
 getWorkspaceDirectory = fmap fst . getWorkspaceDir

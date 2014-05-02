@@ -847,10 +847,11 @@ focusLast = onFocused focusLastZ
 -- | Move focus to the i'th element (from user's perspective)
 focusAtZ :: Int -> Zipper a -> Zipper a
 focusAtZ _ Nothing = Nothing
-focusAtZ i (Just (W.Stack f up down)) 
-    | not $ null a
-        = Just $ W.Stack (head a) (reverse b) (tail a)
+focusAtZ i (Just s@(W.Stack f up down)) 
+    | i < 0 || i >= length ls = Nothing
+    | not $ null a = Just $ W.Stack (head a) (reverse b) (tail a)
         where (b, a) = splitAt i $ (reverse up) ++ [f] ++ down
+              ls = W.integrate s
 focusAtZ _ (Just s) = Just s
 
 focusAt :: Int -> ModifySpec

@@ -11,7 +11,7 @@ import Data.List.Split
 import Data.Either
 import Data.Maybe
 import Data.Monoid (mempty, All(..), appEndo)
-import Data.Traversable
+import Data.Traversable hiding (sequence)
 import Control.Monad hiding (mapM)
 import Control.Exception as E
 import Foreign.C.Types (CLong)
@@ -88,6 +88,7 @@ import XMonad.Util.WindowProperties
 import XMonad.Util.WorkspaceHandles
 import XMonad.Util.WorkspaceDirectories
 import XMonad.Actions.FloatKeys
+import XMonad.Actions.PhysicalScreens
 import Graphics.X11.Xlib.Extras
 import Graphics.X11.Xlib.Misc
 import qualified Data.Map as M
@@ -482,7 +483,17 @@ rectTabs = G.group3 (renamed [CutWordsRight 1] $ addTabs shrinkText myTabsTheme 
 myLayout = minimize . noBorders . avoidStruts $ lessBorders Screen rectTabs
 
 -- corrected focus function that unminimize the given window
-deminimizeFocus w = deminimize w >> focus w
+deminimizeFocus w = do
+    deminimize w 
+    -- we will check if w is an Intellij window, if yes we need to refresh after focusing it
+    -- b <- runQuery (filterPredicate intellijTaskGroup) w
+    focus w
+    -- if b then do
+    --         gs <- G.getCurrentGStack
+    --         case gs of
+    --              Just (G.Node (W.Stack _ u _)) -> sendMessage $ G.Modify $ G.focusGroupAt $ length u 
+    --              _ -> return ()
+    --      else return ()
 deminimize w = routeMessageToWS ((w `elem`) . W.integrate' . W.stack) (RestoreMinimizedWin w)
 routeMessageToWS fun mess = do
     wss <- allWorkspaces
@@ -492,46 +503,13 @@ routeMessageToWS fun mess = do
             | W.tag ws /= curr -> sendMessageWithNoRefresh mess ws 
             | otherwise -> sendMessage mess
          _ -> return ()
-minimizeWindows ls = deleteWindowsSelection ls >> correctFocus (mapM_ minimizeWindow) ls
-minimizeWindows' tag ls = do
-    correctFocus (mapM_ (\w -> routeMessageToWS ((==tag).W.tag) (MinimizeWin w))) ls
-    -- clear the focus if necessary
 
-restoreMinimizedWindowsAndSelect' [] = return ()
-restoreMinimizedWindowsAndSelect' wins = markWindowsSelection wins >> mapM_ deminimizeFocus wins 
-restoreMinimizedWindowsAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect'
-restoreMinimizedWindowAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect' . wrapList . head
 
 
 isMinimized = ask >>= \w -> liftX $ do
     wss <- allWorkspaces
     wins <- mapM getMinimizedWindows $ fmap W.layout wss
     return $ w `elem` (concat $ wins)
-
-    {-where tallTiledTabs = G.group (addTabs shrinkText myTabsTheme Simplest) $ -}
-              {-GridRatio (4/3) ||| -}
-              {-multiCol [1] 2 (3/100) (-0.5) ||| -}
-              {-ThreeCol 1 (3/100) (1/2) ||| -}
-              {-ThreeColMid 1 (3/100) (1/2) ||| -}
-              {-Tall (1) (3/100) (1/2) |||-}
-              {-Full-}
-              {-vert = named "Vertical" $ Tall (1) (3/100) (1/2)-}
-
-{-data ReorderGroups a = ReorderGroups deriving (Read, Show)-}
-
-{-instance LayoutModifier ReorderGroups Window where-}
-    {-redoLayout m _ _ wrs = do-}
-           {-mgs <- G.getCurrentGStack-}
-           {-let place = case fmap G.flattened mgs of -}
-                             {-Just ls -> sortBy (\(w1,_) (w2,_) -> compare (elemIndex w1 ls) (elemIndex w2 ls))-}
-                             {-_ -> id-}
-           {-oldStack <- gets $ W.stack . W.workspace . W.current . windowset-}
-           {-let ns = case mgs of -}
-                        {-Just gs -> G.toZipper gs -}
-                        {-_ -> oldStack-}
-           {-setStack ns-}
-           {-return (place wrs, Just m)-}
-
 
 joinStr delimit [] = ""
 joinStr delimit ls = foldl' ((++) . (++delimit)) (head ls) (tail ls)
@@ -712,12 +690,10 @@ autoArrangeHook wgs = fmap not isDialog --> ask >>= \w -> liftX $ do
                 mempty
          _ -> mempty
 
--- provding a more correct implementation of kill systems (refocusing on the window instead!
-focusNextKillWindow w = focusNextKillWindows [w]
-focusNextKillWindows ls = do
-    deleteWindowsSelection ls
+killWindows ls = flip correctFocus ls $ \wins -> do
+    deleteWindowsSelection wins
     -- now just kill all windows that 
-    correctFocus (mapM_ killWindow) ls
+    mapM_ killWindow wins
 
 nextFocus (G.Leaf (Just (W.Stack _ u (d:_)))) = Just d
 nextFocus (G.Leaf (Just (W.Stack _ (u:_) _))) = Just u
@@ -739,22 +715,22 @@ correctFocus a wins = do
          Just f -> do
             isf <- runQuery isFloating f
             mgs <- G.getCurrentGStack
-            a wins
             case (isf, f `elem` wins, mgs) of
-                 (True, True, _) -> nextMatch History $ isInCurrentWorkspace <&&> fmap not isFloating
-                 (False, True, Just gs) -> let correctf = fmap G.focal $ G.filter (not . (`elem` wins)) gs
-                                           in withFocused $ \nf ->
-                                               case correctf of
-                                                    Just (Just nw) | nw == nf -> return ()
-                                                                   | otherwise -> focus nw
-                                                    _ -> return ()
-                 _ -> return ()
+                 (True, True, _) -> do 
+                    -- nextMatch History $ isInCurrentWorkspace <&&> fmap not isFloating
+                    maybe (return ()) focus $ maybeToMaybe G.focal mgs 
+                    -- focus to the current focus in the stack
+                    a wins 
+                 (False, True, Just gs) -> let correctf = maybeToMaybe G.focal $ G.filter (not . (`elem` wins)) gs
+                                           in maybe (return ()) focus correctf >> a wins
+                 _ -> a wins
          _ -> a wins
 
 -- this is conceptually equivalent to navigating back to the last window that's not on the same layer
-switchFocusFloat = withFocused $ \f -> do
-    isf <- runQuery isFloating f
-    nextMatch History $ isInCurrentWorkspace <&&> fmap (if isf then not else id) isFloating
+-- switchFocusFloat = withFocused $ \f -> do
+--     isf <- runQuery isFloating f
+--     nextMatch History $ isInCurrentWorkspace <&&> fmap (if isf then not else id) isFloating
+switchFocusFloat = switchLayer
 -- }}}
 
 ---------------- LogHook -- {{{
@@ -831,14 +807,17 @@ showFilled = do
                     Nothing -> name
            else name
 
-colorTaskGroupName spc nc bg g
+colorTaskGroupName shorten spc nc bg g
     | not $ null (filterKey g) = splitFst (filterKeyList $ filterKey g) spc nc (taskGroupName g)
     | otherwise =  dzenColor nc bg (taskGroupName g) 
         where splitFst cs spc nc str = if null cs then dzenColor nc bg str 
-                                                  else let h=head cs in 
-                                                           case break (\ch -> toLower ch == h || toUpper ch == h) str of
-                                                               (a, x:xs) -> (dzenColor nc bg a)++(dzenColor spc bg [h])++(splitFst (tail cs) spc nc xs)
-                                                               _ -> dzenColor nc bg str
+                                                  else let h=head cs 
+                                                           fspc = dzenColor spc bg [h]
+                                                           in if shorten 
+                                                                 then fspc 
+                                                                 else case break (\ch -> toLower ch == h || toUpper ch == h) str of
+                                                                               (a, x:xs) -> (dzenColor nc bg a)++fspc++(splitFst (tail cs) spc nc xs)
+                                                                               _ -> dzenColor nc bg str
 
 -- a tentative printing function for a given GStack
 -- we'll first convert the gstack to a stack of strings according to the task group within each leaf, and then we can easily print it using another function
@@ -853,7 +832,7 @@ infoFromTaggedGStack ms@(G.Node (W.Stack f u d)) =
     let wl = zip (fmap ((++".") . wrapList) subgroupSymbolSequence ++ repeat "") $ repeat ""
         nl = G.level ms
     -- need to get the number of levels inside the struct
-    in infoFromTaggedGStack' ("  ":repeat "") ("","") (wl:(repeat $ repeat ("[","]"))) (myNotifyColor, "/") (take (nl-1) (repeat (myFgColor, myFgColor)) ++ [(myTextHLight, myFgColor)]) myBgColor ms
+    in infoFromTaggedGStack' False ("  ":repeat "") ("","") (wl:(repeat $ repeat ("[","]"))) (myNotifyColor, "/") (take (nl-1) (repeat (myFgColor, myFgColor)) ++ [(myTextHLight, myFgColor)]) myBgColor ms
 infoFromTaggedGStack _ = ""
 
 -- this takes the highlight color for the focused group, and then a function that transform a group to a string
@@ -861,15 +840,15 @@ infoFromTaggedGStack _ = ""
 -- fkeyColor: the filter key color (only used in the base case)
 -- focusHL, fgColor: the focusColor for the current group, the fgColor for other groups
 -- bgColor: the background color (should be uniform across)
-infoFromTaggedGStack' (delimit:dls) (wrapl,wrapr) (wl:wraps) (fkeyColor,tgdelimit) ((focusHL,fgColor):cps') bgColor ms = 
+infoFromTaggedGStack' shorten (delimit:dls) (wrapl,wrapr) (wl:wraps) (fkeyColor,tgdelimit) ((focusHL,fgColor):cps') bgColor ms = 
      wrap (nc wrapl) (nc wrapr) $ case ms of
-                                G.Leaf s@(Just (W.Stack (_,ftg) u d)) -> joinStr (nc tgdelimit) $ fmap (\g -> colorTaskGroupName fkeyColor (if g == ftg then focusHL else fgColor) bgColor (fromMaybe def g)) $ nub $ snd $ unzip $ W.integrate' s
+                                G.Leaf s@(Just (W.Stack (_,ftg) u d)) -> joinStr (nc tgdelimit) $ fmap (\g -> colorTaskGroupName shorten fkeyColor (if g == ftg then focusHL else fgColor) bgColor (fromMaybe def g)) $ nub $ snd $ unzip $ W.integrate' s
                                 G.Leaf Nothing -> ""
                                 G.Node s@(W.Stack fs us dss) -> 
                                     let ncps m
                                             | m==fs = fmap (\(hl, fg)->(hl, focusHL)) cps'
                                             | otherwise = fmap (\(hl, fg)->(fgColor, fg)) cps'
-                                        in joinStr (nc delimit) $ fmap (\(wp, mn) ->infoFromTaggedGStack' dls wp wraps (fkeyColor,tgdelimit) (ncps mn) bgColor mn) $ zip wl $ W.integrate s
+                                        in joinStr (nc delimit) $ fmap (\(wp, mn) ->infoFromTaggedGStack' shorten dls wp wraps (fkeyColor,tgdelimit) (ncps mn) bgColor mn) $ zip wl $ W.integrate s
         where nc = dzenColor fgColor bgColor
 
 workspaceNamesPP pp = do
@@ -917,17 +896,23 @@ statusLogHook h =  do
                                     _ -> return $ Just ""
                            {-return $ Just $ joinStr "  " gns-}
                            , do
-                               ls <- getCurrentMinimizedWindows
-                               -- test if the current focused window is inside the list, correct that
-                               withFocused $ \f -> if f `elem` ls then G.getCurrentGStack >>= maybe (return ()) focus . maybe Nothing G.focal
-                                                                  else return ()
-                               {-spawn $ "echo '"++(show ls)++"' > ~/.xmonad/xmonad.test"-}
-                               tgs <- taggedGStack taskGroups (G.fromZipper (W.differentiate $ reverse ls) 1) 
-                               {-spawn $ "echo '"++(show $ infoFromTaggedGStack tgs)++"' > ~/.xmonad/xmonad.test"-}
-                               return $ Just $ infoFromTaggedGStack' (repeat "") ("","") (repeat $ repeat ("","")) (myNotifyColor, "|") (repeat (myFgColor, myFgColor)) myBgColor tgs
+                               ls <- fmap reverse getCurrentMinimizedWindows
+                               -- we first check for all the tags they have
+                               regs <- fmap (reverse . sortRegs . S.toList . S.fromList . concat) $ mapM getTags ls
+                               -- now for each tag we scan through the list to get all the windows
+                               let pinfo = infoFromTaggedGStack' True (repeat "") ("","") (repeat $ repeat ("","")) (myNotifyColor, "/") (repeat (myFgColor, myFgColor)) myBgColor
+                                   toTg l = taggedGStack taskGroups (G.fromZipper (W.differentiate $ reverse l) 1) 
+                                   prinfo (r, info) = "'"++r++":"++info
+                               rwins <- mapM (\r -> filterM (hasTag r) ls) $ regs
+                               starwins <- filterM (fmap null . getTags) ls
+                               let pairs = (if not (null starwins) then [("*", starwins)] else [])++zip regs rwins
+                                   (rls, winls) = unzip pairs
+                               tgs <- mapM toTg winls
+                               return $ Just $ joinStr "|" $ fmap prinfo $ zip rls (fmap pinfo tgs)
                            ]
         } 
     dynamicLogWithPP pp
+
 
 -- the width of the xmonad bar and the status bar would be determined dynamically during boot time
 -- this method will return the log bar instance for xmonad to pipe the output to
@@ -939,8 +924,8 @@ myStatusBars = do
         {-trayerw = 20-}
         {-musicx = w * 2/3-}
         {-musicw = statbarx - musicx + myDzenBarOverlap-}
-        statbarw = w / 3
-        statbarx = w - statbarw
+        statbarw = w / 3                                                                     
+        statbarx = w - statbarw                                                              
         {-myTrayer = trayer "top" "right" trayerw myDzenBarHeight myBgColor 0-}
         myDzenBar x w a = dzenBar x 0 w myDzenBarHeight a myFgColor myBgColor myDzenFont
         myLogBar = myDzenBar xbarx xbarw "l"
@@ -1115,6 +1100,7 @@ setWorkspaceName h n = do
 
 setWorkspaceNameByTag t n = getWorkspaceHandle t >>= \h -> setWorkspaceName h n
 setCurrentWorkspaceName n = getCurrentWorkspaceHandle >>= \h -> setWorkspaceName h n
+getCurrentWorkspaceName = getCurrentWorkspaceHandle >>= getWorkspaceName
 
 -- a set of positions to simulate those used in Vim as i,a,I,A respectively
 data WorkspaceInsertPosition = Before | After | Head | Last
@@ -1219,7 +1205,25 @@ toggleTag tag = do
     l <- lastWorkspaceTag
     return $ if curr == tag then l else tag
 
-moveToWorkspace tag = quickWorkspace tag >>= windows . W.shift
+-- the onselectedwindows protocol expects: the windows disappear after the action applies
+-- the after moving to tmpspace is useful if you want to apply a one-step operation (like shifting)
+onSelectedWindowsAfterMovingToTmpSpace a = do
+    (st, opts) <- getSelectedWindowStack' False
+    flip correctFocus (W.integrate' st) $ \wins -> do
+        case opts of
+             Just (mvs, lw) -> windows $ \s -> foldr (W.shiftWin scratchpadWorkspaceTag) s mvs
+             _ -> return ()
+        a wins
+onSelectedWindows a = do
+    (st, _) <- getSelectedWindowStack' False
+    a $ W.integrate' st
+
+-- we can 
+moveToWorkspace tag = do
+    t <- quickWorkspace tag 
+    -- first get the selection stack
+    onSelectedWindowsAfterMovingToTmpSpace $ \wins -> 
+        windows $ \s -> foldr (W.shiftWin t) s wins
 
 -- the workspace prompt works by first returning all the completions for the current workspace; if there are no suitable completions, it automatically gives back results from "symtag print '%t' <tag>"
 -- upon successfully creating a workspace, it will set the workspaceDirectory using the path given by "symtag print '%p' <tag> | head -n 1"
@@ -1272,43 +1276,60 @@ workspacePrompt conf p ef f = do
             -- do something with the name
             f name path
 
-newWorkspacePrompt conf prompt insp f = workspacePrompt conf prompt (\t n -> f t) (\n p -> do
-    t <- reuseHiddenIdleWorkspaceWithName n insp
-    f t 
-    saveWorkspaceDirectory p t)
+newWorkspacePrompt conf prompt insp iter f = workspacePrompt conf prompt (\t n -> f t) (\n p -> insertWorkspace n insp iter p f)
+
+-- insert iter number of workspaces at the specified location and then apply a given function to the last
+-- one
+insertWorkspace name insp iter path fun = do
+    let cw = do
+        t <- reuseHiddenIdleWorkspaceWithName name insp 
+        saveWorkspaceDirectory path t 
+        return t
+    res <- sequence $ take iter $ repeat $ cw
+    case res of
+         [] -> return ()
+         h:_ -> fun $ last res
 
 ---- rename the current workspace
-renameWorkspacePrompt conf = workspacePrompt conf "Rename workspace" (\t n -> setCurrentWorkspaceName n) (\n p -> setCurrentWorkspaceName n >> saveCurrentWorkspaceDirectory p) 
+-- for the time being because we want to allow the user some freedom of actually renaming the workspace after assigning a workspace directory to it, so what we do is that we'll only reassign the directory when necessary
+renameWorkspacePrompt conf = workspacePrompt conf "Rename workspace" (\t n -> setCurrentWorkspaceName n) (\n p -> do
+    if not (null p) then saveCurrentWorkspaceDirectory p
+                    else return ()
+    setCurrentWorkspaceName n) 
 
 wrapList c = [c]
 
-removeCurrentWorkspace = removeCurrentWorkspace' ""
-removeCurrentWorkspace' reg = do
-    -- remove all window selectinos
-    -- remove all the hiden windows as well
+removeCurrentWorkspace = gets (W.currentTag . windowset) >>= removeWorkspace
+removeWorkspace tag = do
+    -- remove all windows
+    wss <- allWorkspaces
     curr <- gets (W.currentTag . windowset)
-    (l, r, gf, ml, float, _, _) <- getSides
-    -- move all the windows to the tmpworkspace
-    let winsToKill = float ++ l ++ gf ++ r ++ ml
-    minimizeWindows' tmpWorkspaceTag winsToKill
-    -- our methodology is simple, remove the current workspace and reorder the symbol stream for the tags
-    -- so this involves repairing the tags with the associated handles
-    -- we can savely remove the workspace if all the workspaces after this workspace are empty
-    if curr /= tmpWorkspaceTag 
-       then do
-            wts <- allWorkspaceTags
-            let (bef, _:aft) = break (==curr) wts
-                nt = case aft of
-                          [] -> last bef
-                          h:_ -> h
-            windows $ W.greedyView nt
-            -- kill the scratchpads matching this workspace
-            ifWindows (isPerWSScratchpadBoundToWS curr) (mapM_ killWindow) (return ())
-            windows $ removeWorkspaceByTag curr
-            removeWorkspaceHandleByTag curr
-            renameWorkspaces (zip aft $ fmap wrapList $ symbolFrom $ head curr)
-        -- we'd like to remove the name and directory setting for the temp workspace in that case
-       else setCurrentWorkspaceName "" >> saveCurrentWorkspaceDirectory ""
+    let (ws, nws, aft) = case break ((==tag) . W.tag) wss of
+                         ([], []) -> (Nothing, Nothing, [])
+                         (_, ws:h:aft) -> (Just ws, Just h, h:aft)
+                         ([], ws:aft) -> (Just ws, Nothing, aft)
+                         (ls, ws:aft) -> (Just ws, Just $ last ls, aft)
+                         (ls, _) -> (Nothing, Just $ last ls, [])
+    case ws of
+         Nothing -> return ()
+         Just w -> do
+            -- the minimize is not really working
+            -- minimizeWindows' tmpWorkspaceTag winsToKill
+            killWindows $ W.integrate' $ W.stack w
+            -- our methodology is simple, remove the current workspace and reorder the symbol stream for the tags
+            -- so this involves repairing the tags with the associated handles
+            -- we can savely remove the workspace if all the workspaces after this workspace are empty
+            if  (W.tag w) /= tmpWorkspaceTag 
+               then do
+                    if curr == tag then maybe (return ()) (windows . W.greedyView . W.tag) nws 
+                                   else return ()
+                    -- kill the scratchpads matching this workspace
+                    ifWindows (isPerWSScratchpadBoundToWS tag) (mapM_ killWindow) (return ())
+                    windows $ removeWorkspaceByTag tag
+                    removeWorkspaceHandleByTag tag
+                    renameWorkspaces (zip (fmap W.tag aft) $ fmap wrapList $ symbolFrom $ head tag)
+                -- we'd like to remove the name and directory setting for the temp workspace in that case
+               else setWorkspaceNameByTag tag "" >> saveWorkspaceDirectory "" tag
 
 -- assume that the workspace to be removed is in the hidden workspaces list
 removeWorkspaceByTag t s@(W.StackSet { W.hidden = hs })
@@ -1512,8 +1533,19 @@ stripGrepOutput = head . splitOn ":"
 isShortcutOutput s = length s > 2 && (s!!1) == ':'
 stripShortcutOutput = last . splitOn ":"
 -- the index i is the i'th arg from the end
-isSearchFilter (i, s) = i > 0 && s `elem` ["f", "a", "d", "z", "h", "l", "t", "g", "gp", "which", "diff"] || ((length s) `elem` [1, 2] && (head s) `elem` "'m")
-isStatDiffOutput = (=~ " +\\| +[0-9]+ [+-]+")
+isSearchFilter (i, s)
+    -- just not performance-wise up to the standard for fasd right now.
+    -- I have the feeling that the author hasn't done a terribly good job at optimizing this
+    -- | i > 0 && s `elem` ["f", "a", "d", "z"] = True
+    | i > 0 && s `elem` ["h", "l", "t", "which", "diff"] = True 
+    -- we let the application to decide what to do after that
+    | i > 0 && s `elem` ["g", "gp"] = True
+    | i == 0 && (length s) `elem` [1, 2] && head s == '\'' && not ((last s) `elem` "v") = True
+    | i > 0 && length s == 2 && head s == 'm' && not ((last s) `elem` "v") = True
+    | i > 0 && s == "diff" = True
+    | otherwise = False
+-- isStatDiffOutput = (=~ " +\\| +[0-9]+ [+-]+")
+isStatDiffOutput = (=~ " +\\| +[^ ]+ [^ ]+")
 stripStatDiffOutput = trim . head . splitOn "|" 
 filterDiffOutput ls = case findIndex (isPrefixOf "--- ") ls of
                             Just i | i > 0 && i < length ls - 1 && (cxt (i-1) (i+1) || cxt (i+1) (i-1)) ->
@@ -1563,24 +1595,22 @@ evalStr s = let evalcomps = splitOn "`" s
             in if odd evallen && evallen >= 3 then (head evalcomps, head t, joinStr "`" $ tail t)
                                               else (s,"","")
 
-stripIndex (a, b) = (fmap snd a, fmap snd b)
 dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
-                case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) $ zip [0..] $ reverse args of
-                   (_:_, "z":bef) | not hl -> joinStr " " $ reverse bef ++ ["c", escape (head l)]
-                   ([], ('\'':pre):bef) -> exactMatch $ fmap stripShortcutOutput l
-                   ([], ('m':pre):_) -> c
+                case dpromptBreak args of
+                   (_, "z":bef) | not hl -> joinStr " " $ reverse bef ++ ["c", escape (head l)]
+                   ([], ('\'':_):_) -> exactMatch $ fmap stripShortcutOutput l
                    (_, "which":bef) | all ((`elem` "~/") . head) l && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
                                     | otherwise -> exactMatch l
                    (aft, "diff":bef) | not (null fdo) -> joinStr " " $ reverse bef ++ [escape (head fdo)]
-                   (_:_, w:bef) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                   (_, w:bef) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                            in joinStr " " $ reverse bef ++ [w, promptNextCompletion wp (widgetCmd wp c) l]
                    -- we have to specify manually so the 'm' case above when there is some sort of the string on its right would sift through here
-                   (_:_, f:bef) | f `elem` ["f", "a", "d", "h", "l", "t", "which"] && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
+                   (_, f:bef) | f `elem` ["f", "a", "d", "h", "l", "t", "which"] && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
                    _ | all isGrepOutput l -> joinStr " " $ takeWhile (\t -> t /="g" && t /= "gp") (init args) ++ case exactNext $ fmap stripGrepOutput l of
                                                                                           [] -> []
                                                                                           s -> [s]
                      | all isShortcutOutput l -> exactMatch $ fmap stripShortcutOutput l
-                     | not (null fsdo) && length fsdo == length l - 1 -> exactMatch $ fmap stripStatDiffOutput fsdo
+                     | not (null fsdo) && (length fsdo) `elem` [length l, length l - 1] -> exactMatch $ fmap stripStatDiffOutput fsdo
                      | not (null fdo) -> exactMatch fdo
                      | not (null evalstr) ->  evall ++ escape (head l) ++ evalr
                      | all isOutput l && any ("commit" `isPrefixOf`) l && any ("Author" `isPrefixOf`) l && any ("Date" `isPrefixOf`) l -> exactMatch $ fmap (fromJust . stripPrefix "commit " . trim) $ filter ("commit " `isPrefixOf`) l
@@ -1596,8 +1626,8 @@ dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
                                Just i -> if i <= 0 then length ls - 1 else (i-1)
                                Nothing -> length ls - 1 
 
-dpromptHighlightPredicate cl cmd = case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) (zip [0..] $ reverse args) of
-                (_:_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+dpromptHighlightPredicate cl cmd = case dpromptBreak args of
+                (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                       in promptHighlightPredicate wp cl (widgetCmd wp cmd)
                 _ | isGrepOutput cl -> stripGrepOutput cl == unescapedLastArg
                   | isShortcutOutput cl -> stripShortcutOutput cl == unescapedLastArg
@@ -1609,6 +1639,15 @@ dpromptHighlightPredicate cl cmd = case stripIndex $ break (\s -> isSearchFilter
              where args = parseShellArgs cmd
                    unescapedLastArg = unescape $ last args 
                    trimcl = trim cl
+
+-- given an array of arguments break it in such a way that it divides the necessary keyword with what is after 
+dpromptBreak args = 
+    -- we would first break from the beginning to see if any widget matches up
+    let stripIndex (a, b) = (fmap snd a, fmap snd b)
+        rev = zip [0..] $ reverse args
+    in case break isWidgetFilter rev of
+         (a, []) -> stripIndex $ break isSearchFilter rev
+         b -> stripIndex b
 
 whenNull ma mb = do
     l <- ma
@@ -1643,28 +1682,31 @@ dpromptComplFunc c cmds home hist s = do
             grepcmp' cmd aft = fmap (filter (':' `elem`)) $ output (myScriptsDir++"/"++cmd) $ show grepLimit:(fmap epd aft)
             grepcmp = grepcmp' "xgrep"
             pgrepcmp = grepcmp' "xpdfgrep"
-        case stripIndex $ break (\s -> isSearchFilter s || isWidgetFilter s) (zip [0..] $ reverse unescapedArgs) of
-                    (af:afs, "f":_) -> fasd $ ["-f", "-B", "viminfo"] ++ (reverse $ af:afs)
-                    (af:afs, "d":_) -> fasd $ "-d" : (reverse $ af:afs)
-                    (af:afs, "a":_) -> fasd $ ["-a", "-B", "viminfo"] ++ (reverse $ af:afs)
-                    (af:afs, "z":_) -> fasd $ "-d" : (reverse $ af:afs)
-                    (af:afs, "h":_) -> return $ take historyLimit $ filter (sp $ joinStr " " $ reverse $ af:afs) $ hist
-                    ([], ('\'':pre:[]):_) -> shtout $ sct [pre]
-                    ([], ('m':pre:[]):_) | pre /= 'v' -> shtout $ sct [pre]
-                    (af:afs, "l":_) -> shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ reverse (af:afs))) ""
+            gitcmdcmp args = return $ filter (sp args) ["add", "am", "archive", "bisect", "branch", "bundle", "checkout", "cherry-pick", "citool", "clean", "clone", "commit", "describe", "diff", "fetch", "format-patch", "gc", "grep", "gui", "init", "log", "merge", "mv", "notes", "pull", "rebase", "reset", "rm", "shortlog", "show", "stash", "status", "submodule", "tag"]
+        case dpromptBreak unescapedArgs of
+                    (afs, "f":_) -> fasd $ ["-f", "-B", "viminfo"] ++ (reverse afs)
+                    (afs, "d":_) -> fasd $ "-d" : (reverse afs)
+                    (afs, "a":_) -> fasd $ ["-a", "-B", "viminfo"] ++ (reverse afs)
+                    (afs, "z":_) -> fasd $ "-d" : (reverse afs)
+                    (afs, "h":_) -> return $ take historyLimit $ filter (sp $ joinStr " " $ reverse afs) $ hist
+                    ([], ('\'':pre):_) -> shtout $ sct pre
+                    (afs, ('m':pre):_) -> shellcmp' ["directory"] []
+                    (afs, "l":_) -> shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ reverse afs)) ""
                     -- for g, we demand that at least SOME search term is entered, otherwise we don't generate the necessary output
                     (af:afs, "g":_) -> trycmp $ (if afs == [] then [shellcmp' ["file"] []] else []) ++ [grepcmp (reverse $ af:afs)]
                     (af:afs, "gp":_) | afs == [] -> shellcmp' ["file"] []
                                      | not (null afs) && af == "" -> pgrepcmp (reverse $ af:afs)
-                    (af:afs, "t":_) -> fmap (fmap (tagLibroot++) . lines) $ runProcessWithInput tagBin ([show tagLimit, "false"] ++ tagQuery (reverse (af:afs))) ""
-                    (af:afs, "which":_) -> 
+                    (afs, "t":_) -> fmap (fmap (tagLibroot++) . lines) $ runProcessWithInput tagBin ([show tagLimit, "false"] ++ tagQuery (reverse afs)) ""
+                    (afs, "which":_) -> 
                         let ha = head cas
-                            cas = reverse $ af:afs
+                            cas = reverse afs
                         -- test if af is one of the commands
                         in if ha `elem` cmds then shtout $ fmap lines $ runProcessWithInput "which" cas ""
                                              else shtout $ return $ take whichLimit $ filter (sp $ joinStr " " cas) cmds
-                    (af:afs, "diff":_) | ntailsp == 1 -> output (myScriptsDir++"/xdiff") (show outputWidth:show outputHeight:(reverse (af:afs)))
-                    (_:_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
+                    -- we need to make sure that we are using the current directory as a starting point
+                    (afs, "diff":_) | ntailsp <= 1 -> trycmp [output (myScriptsDir++"/xdiff") (show outputWidth:show outputHeight:diffargs), shellcmp' ["file"] []]
+                            where diffargs = if afs == [""] then [] else reverse afs
+                    (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                           in (promptComplFunction wp) c (widgetCmd wp s)
                 -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
                     _ | not (null evalstr) -> shtout $ fmap (take evalLimit . lines) $ runProcessWithInput "bash" ["-c", evalstr] ""
@@ -1676,9 +1718,9 @@ dpromptComplFunc c cmds home hist s = do
                             ["top", ""] | ntailsp == 1-> output (myScriptsDir++"/xtop") [show topLimit]
                             ["free", ""] | ntailsp == 1 -> output "free" []
                             ["ifconfig", ""] | ntailsp == 1 -> output "ifconfig" []
-                            ["git", ""] | ntailsp == 1 -> output "git" ["status"]
+                            ["git", ""] | ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
                             -- only gives the prime command completion on three spaces
-                            ["git", pa] -> return $ filter (sp pa) ["add", "am", "archive", "bisect", "branch", "bundle", "checkout", "cherry-pick", "citool", "clean", "clone", "commit", "describe", "diff", "fetch", "format-patch", "gc", "grep", "gui", "init", "log", "merge", "mv", "notes", "pull", "rebase", "reset", "rm", "shortlog", "show", "stash", "status", "submodule", "tag"]
+                            ["git", pa] -> gitcmdcmp pa
                             -- in all other instances we should give the log information
                             "git":pa:_ -> trycmp [output "git" $ ["log", "--grep", last unescapedArgs], scopecmp, shellcmp]
                             _ -> trycmp [scopecmp, shellcmp]
@@ -1688,7 +1730,7 @@ dpromptAction c cmds home hist s =
         let args = parseShellArgs s
         in case (findWidgetForAction s, args) of
                 (Just (rest, w), _) -> (promptAction w) rest
-                (_, [('m':pre:[]), pa]) | pre /= 'v' -> spawn $ myScriptsDir++"/xshortcut mark "++[pre]++" "++pa
+                (_, [('m':pre:[]), pa]) -> spawn $ myScriptsDir++"/xshortcut mark "++[pre]++" "++pa
                 (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do
                                  d <- if null pas 
                                          then return home 
@@ -1775,6 +1817,23 @@ defaultEngDictModes = [XPT $ defaultSDMode, XPT $ mobySDMode]
 defaultChDictModes = [XPT $ modernCHSDMode, XPT $ bigCHSDMode]
 defaultCalcModes = [calcMode]
 
+-- cycling between different dictionary
+cycleDictionaryForDPrompt dir = do
+    str <- getInput
+    let ls = (if dir == Next then id else reverse) ["sdcv-Collins", "sdcv-Moby", "sdcv-modernChinese", "sdcv-bigChinese"]
+        nstr = case findIndex (`isPrefixOf` str) ls of 
+                    Just i -> (ls !! ((i+1) `mod` (length ls))) ++ (maybe "" ((" "++) . dropWhile isSpace) $ stripPrefix (ls !! i) str)
+                    _ -> head ls ++ " " ++ dropWhile isSpace str
+    setInput nstr
+    endOfLine
+
+addOrTruncateTillPrefix prefix = do
+    str <- getInput
+    if prefix `isPrefixOf` str
+       then setInput prefix
+       else setInput $ prefix ++ dropWhile isSpace str
+    endOfLine
+
 -- }}}
 
 ----- Vimb prompt -- {{{
@@ -1855,11 +1914,54 @@ instance XPrompt WindowSearchPrompt where
 
 
 mkSearchPrompt config prompt predicate a = do
-    wm <- windowMap
+    -- we'd probably just get all the workspaces and then the windows inside
+    wss <- allWorkspaces
+    curr <- gets (W.currentTag . windowset)
+    (l, r, gf, ml, float, _, _) <- getSides
+    names <- getWorkspaceNames
+    -- get the last window
+    lm <- nextMatched History (return True)
+    let wswins = W.integrate' . W.stack
+        cwins = l++gf++r++float++ml
+        winfo :: Window -> X ((String, String), Window)
+        winfo w = do
+            t <- runQuery title w
+            tags'' <- getTags w
+            let tags = sortRegs $ if Just w == lm then tags'++["'"] else tags'
+                tags' = case tags'' of
+                         [] | w `elem` ml -> ["*"]
+                            | otherwise -> []
+                         ts -> ts
+            return (((if null tags then id else wrap "[" "]") $ concatMap ("'"++) tags, t), w)
+        wp ws = fmap (fmap (attag (W.tag ws))) $ mapM winfo $ wswins ws
+        wr = fmap concat . mapM wp
+        attag t ((a,b),w) = ((a,names t,b),w)
+    (winfos, winls) <- case break ((==curr) . W.tag) wss of
+         (bf, c:af) -> do 
+                bis <- wr bf
+                ais <- wr af
+                cis <- fmap (fmap (attag curr)) $ mapM winfo cwins
+                return $ unzip $ bis ++ cis ++ ais
+         (bf, _) -> fmap unzip $ wr bf
+    let fillsp ls = let l = maximum $ fmap length ls
+                        fsp s = (take (l - length s) $ repeat ' ')++s
+                    in fmap fsp ls
+        (is, wins) = unzip $ flip sortBy (zip winfos winls) $ \((a,b,c),_) ((d,e,f),_) -> 
+            let regl = ["['\"","[", ""]
+                tagl = ["`", ""]
+                fun l s = findIndex (`isPrefixOf` s) l
+                cm l a b = case compare (fun l a) (fun l b) of
+                             EQ -> compare a b
+                             r -> r
+            in case (cm regl a d, cm tagl b e, compare c f) of
+                 (EQ, EQ, z) -> z
+                 (EQ, y, _) -> y
+                 (x, _, _) -> x
+        (regs', tags', tits) = unzip3 is
+        finfos = fmap (\(a,b,c)->a++" ["++b++"]: "++c) $ zip3 (fillsp regs') (fillsp tags') tits
     -- filter the windows according to p
-    matches <- filterM (runQuery predicate . snd) $ M.toList wm
-    mkXPrompt (WindowSearchPrompt prompt) config (\s -> return $ filter (searchPredicate config s) $ map fst matches) $ \r ->
-        whenJust (M.lookup r wm) $ a
+    mkXPrompt (WindowSearchPrompt prompt) config (\s -> return $ filter (searchPredicate config s) finfos) $ \r ->
+        whenJust (fmap (wins !!) $ elemIndex r finfos) $ a
 
 -- }}}
 
@@ -1916,16 +2018,6 @@ jumpWindowHistory dir p = do
          Prev -> withFocused markWindow >> nmat (fmap not windowIsMarkedQuery)
          Next -> nmat windowIsMarkedQuery >> withFocused unmarkWindow >> runLogHook
 
--- we need to have a toggle to indicate whether the last jump window query is saved; this is used when we clear the modes (if the last query is saved then m-; and m-, are excepted otherwise they clear the modes
-
--- data JumpWindowSavedState = JumpWindowSavedState Bool deriving (Typeable, Show, Read)
--- instance ExtensionClass JumpWindowSavedState where
---     initialValue = JumpWindowSavedState False
---     extensionType = PersistentExtension
- 
--- getJumpWindowSavedState = XS.get >>= \(JumpWindowSavedState s) -> return s
--- saveJumpWindowSavedState = XS.put . JumpWindowSavedState
-
 -- }}}
 
 ---------------- Quick find window states -- {{{
@@ -1980,7 +2072,7 @@ getSides = do
     -- split the windows into two
     -- it's safer to get the windows for the current workspace from group stacks (it's more stable)
     gs <- G.getCurrentGStack
-    ml <- fmap reverse getCurrentMinimizedWindows
+    ml <- getCurrentMinimizedWindows
     let (l, r, gf) = maybe ([],[],[]) (\(W.Stack f u d) -> (reverse u, d, [f])) $ maybe Nothing G.toZipper gs
         (b, a') = break ((==W.currentTag winset). W.tag) wss
         a = if not $ null a' then tail a' else []
@@ -2071,6 +2163,13 @@ instance Default TaskGroup where
                       , windowStyle = windowStyleFromList [doSink, lowerHalfRectHook]
                       , colorScheme = mySubTheme
                       }
+
+intellijTaskGroup = def { taskGroupName = "idea"
+                        , filterKey = "i"
+                        , filterPredicate = className =? "jetbrains-idea"
+                        , localFirst = False
+                        , construct = \_ -> runShell "intellij-idea-ultimate-edition"
+                        }
 
 taskGroups = [ 
       -- vimb instances
@@ -2201,12 +2300,7 @@ taskGroups = [
           {-, construct = runUniqueTerm "" uniqueFinch-}
           {-}-}
       -- intellij singleton
-    , def { taskGroupName = "idea"
-          , filterKey = "i"
-          , filterPredicate = className =? "jetbrains-idea"
-          , localFirst = False
-          , construct = \_ -> runShell "intellij-idea-ultimate-edition"
-          }
+    , intellijTaskGroup
       -- gimp singleton
     , def { taskGroupName = "gimp"
           , filterKey = "S-m"
@@ -2332,7 +2426,6 @@ appendActionWithException a ex ls = ex ++ fmap (\(k, ka) -> (k, ka >> a ka)) ls
 typeables = typeablesWithoutAlphas++alphas
 alphas = ['a'..'z']++['A'..'Z']
 typeablesWithoutAlphas = ['0'..'9']++"!@#$%^&*()-_=+\\|`~[{]}'\",<.>?"
-typeablesNoSlashNorQuote = filter (\c -> c /='/' && c /='\'') typeables
 typeableKeyStrokes = fmap charToKeyStroke typeables
 
 charToKeyStroke c = if isUpper c then "S-"++[toLower c]
@@ -2391,13 +2484,35 @@ numberKeys = zip (fmap show [1..9]) [1..9]
 tabKeys = [ (fromJust $ subgroupIndexToSymbol n, n) | n <- [0..(length subgroupSymbolSequence - 1)] ]
 columnKeys = tabKeys
 groupKeys = zip (fmap show [1..9]) [0..9]
-regKeys :: [(String, (String -> X a) -> X (Maybe a))]
-regKeys = [(charToKeyStroke k, feedReg [k]) | k <- typeablesNoSlashNorQuote ]
 feedReg k fun = fmap Just $ fun k
-regReadonlyKeys = [("'", feedReg "'")]
-regPromptKey prompt = ("/", \a -> initMatches >>= \r -> tagPrompt (myXPConfig r) {
+wrapInclude = fmap (\a -> (a, True))
+getCurrentMinimizedWindowsWithoutRegs = getCurrentMinimizedWindows >>= filterM (fmap null . getTags)
+
+targetForReg r d = wrapAroundWindowsMatchingPredicate d (fmap not isFocused <&&> hasTagQuery r) >>= return . wrapInclude . listToMaybe
+regKeys :: [(String, (String -> X a) -> X (Maybe a), Direction1D -> X (Maybe (Window, Bool)), X [Window])]
+regKeys = [(charToKeyStroke k, feedReg [k]
+            , targetForReg [k]
+            , orderedWindowsMatchingPredicate (hasTagQuery [k])) | k <- filter (not . (`elem` "*/'")) typeables ]
+quoteRefed = fmap (\(a,b,c,d)->("' "++a++" ",b,c,d))
+regReadonlyKeys = [ (charToKeyStroke '\'', feedReg "'"
+                    , \_ -> nextMatched History (return True) >>= return . wrapInclude
+                    , fmap maybeToList $ nextMatched History (return True))
+                  , (charToKeyStroke '*', feedReg "*"
+                    , \d -> fmap (wrapInclude . listToMaybe . if d == Prev then reverse else id) getCurrentMinimizedWindowsWithoutRegs
+                    , getCurrentMinimizedWindowsWithoutRegs)]
+regUnnamedKey = ("", feedReg "", \_ -> return Nothing, return [])
+regTagPrompt prompt a = initMatches >>= \r -> tagPrompt (myXPConfig r) {
     searchPredicate = prefixSearchPredicate
-} prompt a)
+} prompt a
+regPromptKey prompt = (charToKeyStroke '/', regTagPrompt prompt
+                      , \d -> regTagPrompt prompt (\t -> targetForReg t d) >>= return . fromMaybe Nothing
+                      , regTagPrompt prompt (\t -> orderedWindowsMatchingPredicate (hasTagQuery t)) >>= return . fromMaybe [])
+sortRegs = sortBy (\a b -> 
+            let l = fmap wrapList "'\"123456789*" in
+            -- we want a,b,c,d,9,3,2,1,...,""
+            case compare (elemIndex a l) (elemIndex b l) of
+                 EQ -> compare a b
+                 r -> r)
 
 data Motion = Motion {
         -- the window that should be focused by navigation
@@ -2495,6 +2610,7 @@ motionKeys =
     , (wk, sign, include) <- [("b", -1, True), ("w", 1, False)]
     , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
+    -- gg and G
     ++
     [ (sfk, fk, do
         -- get the second level nesting counting from the top
@@ -2516,7 +2632,7 @@ motionKeys =
                       [ (nk++" S-g", "M-g "++nk++" S-g", n')
                       | (nk, n') <- groupKeys] 
                       ++
-                      [ ("S-g", "M-S-g", -1)]
+                      [ ("g S-g", "M-g S-g", -1)]
     ]
     -- the h j k l's
     ++
@@ -2549,10 +2665,11 @@ motionKeys =
     , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
     ++
-    [ ("g "++filterKey g, "M-g "++filterKey g, do
+    [ (px++"g "++filterKey g, "M-"++px++"g "++filterKey g, do
             -- the cycling and toggling would require different techniques
-            let move dir = wrapAroundWindowsMatchingPredicate dir (fmap not isFocused <&&> localFirstFilterPredicate g) >>= return . fmap (\a->(a,True)) . listToMaybe
-            t <- move Next 
+            let move dir = wrapAroundWindowsMatchingPredicate (if dir == d then Next else Prev) (fmap not isFocused <&&> localFirstFilterPredicate g) 
+                            >>= return . fmap (\a->(a,True)) . listToMaybe
+            t <- move d 
             wins <- orderedWindowsMatchingPredicate ((filterPredicate g) <&&> isInCurrentWorkspace)
             return def {
                       target = t
@@ -2562,25 +2679,19 @@ motionKeys =
                 }
       )
     | g <- allTaskGroupsWithFilterKey ["c"]
+    , (px, d) <- [("", Next), ("S-", Prev)]
     ]
     ++
     [ ("' "++tk, "M-g ' "++tk, do
-            let move dir = do
-                    re <- ta (\t -> case t of
-                                         "'" -> fmap maybeToList $ nextMatched History (return True)
-                                         _ -> wrapAroundWindowsMatchingPredicate dir (fmap not isFocused <&&> hasTagQuery t))
-                    return $ case re of
-                         Just (a:_) -> Just (a, True)
-                         _ -> Nothing
-            t <- move Next
-            mwins <- ta (\t -> orderedWindowsMatchingPredicate (hasTagQuery t))
+            t <- xt Next
+            ls <- xls
             return def {
                       target = t
-                    , toggleList = Just $ fromMaybe [] mwins
-                    , searchFunction = Just move
+                    , toggleList = Just ls
+                    , searchFunction = Just xt
                 }
       )
-    | (tk, ta) <- regKeys ++ [regPromptKey "Select windows from register:"] ++ regReadonlyKeys
+    | (tk, ta, xt, xls) <- regKeys ++ [regPromptKey "Select windows from register:"] ++ regReadonlyKeys
     ]
 
 motionKeyCommands' = flip fmap motionKeys $ \(_, k, x) -> (k, do
@@ -2644,9 +2755,9 @@ wssKeys =
     , fks <- [nk++" s"] ++ if n == 1 then ["s"] else [] 
     ]
 
-cutCommands = concatMap (processKey . addPrefix) 
+cutCommands = concatMap (processKey . addPrefix) $
     [ (regk++dc, da)
-    | (regk, ta) <- [("", feedReg "")]++ fmap (\(a,b) -> ("' "++a++" ", b)) (regKeys ++ [regPromptKey "Cut windows to register:"])
+    | (regk, ta, _, _) <- [regUnnamedKey]++ quoteRefed (regKeys ++ [regPromptKey "Cut windows to register:"])
     , (dc, da) <- [ (fk, do
                         ls <- xls
                         ta $ \t -> cut t ls
@@ -2662,13 +2773,12 @@ cutCommands = concatMap (processKey . addPrefix)
                   ]
                   ++
                   [ ("q", do
-                       gs <- getSelectedWindowStack
-                       ta $ \t -> cut t (W.integrate' gs)
-                       return ())
+                       onSelectedWindows $ \wins -> ta (\t -> cut t wins) >> return ())
                   ]
                   ++
                   [ (fks, do
-                      ta $ \t -> sequence_ $ take n $ repeat $ removeCurrentWorkspace' t
+                      -- ta $ \t -> sequence_ $ take n $ repeat $ removeCurrentWorkspace' t
+                      sequence_ $ take n $ repeat $ removeCurrentWorkspace
                       return ())
                   | (fks, n) <- [ (wfk, n')
                                 | (nk, n') <- numberKeys
@@ -2677,10 +2787,13 @@ cutCommands = concatMap (processKey . addPrefix)
                                 [ ("C-S-q", 1) ]
                   ]
     ]
+    ++
+    [ ("d M-"++t, removeWorkspace t)
+    | t <- quickWorkspaceTags]
 
 markCommands = concatMap (processKey . addPrefix) $
     [ (kstr, da)
-    | (regk, ta) <- regKeys ++ [regPromptKey "Put windows into register:"]
+    | (regk, ta, _, _) <- regKeys ++ [regPromptKey "Put windows into register:"]
     , (kstr, da) <- [ ("' "++regk++" m "++mk, do
                             ls <- xls
                             ta $ \t -> mapM_ (addTag t) ls
@@ -2713,13 +2826,13 @@ markCommands = concatMap (processKey . addPrefix) $
     ]
 
 pasteCommands = concatMap (processKey . addPrefix)
-    [ (regk++cmd, ta (paste i np) >> return ())
+    [ (regk++cmd, ta (paste i np xls) >> return ())
     | (cmd, i, np) <- [("p", False, True)
                       -- , ("S-p", False, False)
                       , ("g p", True, True)
                       -- , ("g S-p", True, False)
                       ]
-    , (regk, ta) <- [("", feedReg "")]++ fmap (\(a,b) -> ("' "++a++" ", b)) (regKeys ++ [regPromptKey "Cut windows to register:"]) 
+    , (regk, ta, _, xls) <- [regUnnamedKey]++ quoteRefed (regKeys ++ [regPromptKey "Paste windows from register:"] ++ regReadonlyKeys)
     ]
 visualCommands = 
     [ ("M-v", enterVisualMode Win)
@@ -2780,11 +2893,11 @@ layoutCommands =
     , ("M-C-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsToNewGroupDown s)
     , ("M-C-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToNewGroupUp s)
     , ("M-C-l", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToNewGroupDown s)
-    , ("M-s", sortWindowsWithinGroupStacks)
+    , ("M-C-s", sortWindowsWithinGroupStacks)
     -- a permanent sticky layout that will automatically move any new window into the corresponding task group
-    , ("M-S-s", do
-        h <- getCurrentWorkspaceHandle 
-        toggleAutoArrangeWorkspace h)
+    -- , ("M-S-s", do
+    --     h <- getCurrentWorkspaceHandle 
+    --     toggleAutoArrangeWorkspace h)
     -- toggle insert older
     , ("M-C-x", toggleInsertOlder >> runLogHook)
     -- force insert older, while remembering the old toggle
@@ -2800,7 +2913,7 @@ layoutCommands =
     , ("M-S-<Return>", sendMessage $ G.Modify G.swapGroupMaster)
     , ("M-<Return>", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupMaster)
     , ("M-<Tab>", switchFocusFloat)
-    , ("M-S-<Tab>", switchFocusFloat)
+    -- , ("M-S-<Tab>", switchFocusFloat)
     -- cycling of the window styles
     , ("M-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Next)
     , ("M-S-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Prev)
@@ -2808,18 +2921,28 @@ layoutCommands =
 
 
 promptCommands = 
-    [ ("M-a c", initMatches >>= \r -> renameWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep}) ]
+    [ ("M-s c", initMatches >>= \r -> do
+        -- get the current workspace name
+        name <- getCurrentWorkspaceName
+        renameWorkspacePrompt (myXPConfig r) {
+              searchPredicate = repeatedGrep
+            , defaultText = name
+        }) ]
     ++
-    [ ("M-"++mf++"a "++af, initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos action)
+    [ ("M-"++mf++"s "++nk++mk++af, fun)
     | (mf, action, prompt) <- [ ("", windows . W.greedyView, "workspace")
-                              , ("S-", windows . W.shift, "move to workspace")
-                              , ("C-", moveGroupStackToWorkspace, "move group to workspace")]
+                              , ("S-", windows . W.shift, "move to workspace") ]
     , (af, pos) <- [ ("i"  , Before)
-                   , ("M-i", Before)
                    , ("S-i", Head)
                    , ("a"  , After)
-                   , ("M-a", After)
                    , ("S-a", Last) ]
+    , (nk, n) <- fmap (\(a,b)->(a++" ", b)) numberKeys ++ [("", 1)]
+    , (mk, fun) <- [ ("", initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos n action)
+                   , ("M-", do
+                       nm <- getCurrentWorkspaceName
+                       p <- getCurrentWorkspaceDirectory 
+                       insertWorkspace nm pos n p action)
+                   ] 
     ]
     ++
     [ ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfig r) { 
@@ -2827,19 +2950,11 @@ promptCommands =
             , searchPredicate = repeatedGrep
             , promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
                   ((myModMask, xK_r), quit)
-                , ((myModMask, xK_b), setInput "vb " >> endOfLine)
-                , ((myModMask, xK_c), setInput "calc " >> endOfLine)
-                , ((myModMask, xK_k), setInput "tk " >> endOfLine)
-                , ((myModMask, xK_d), do
-                        str <- getInput
-                        let ls = ["sdcv-Collins ", "sdcv-Moby ", "sdcv-modernChinese ", "sdcv-bigChinese "]
-                            nstr = case findIndex (`isPrefixOf` str) ls of 
-                                       Just i | (ls !! i) == str -> ls !! ((i+1) `mod` (length ls))
-                                              | otherwise -> ls !! i
-                                       _ -> head ls
-                        setInput nstr
-                        endOfLine
-                   )
+                , ((myModMask, xK_b), addOrTruncateTillPrefix "vb ")
+                , ((myModMask, xK_c), addOrTruncateTillPrefix "calc ")
+                , ((myModMask, xK_k), addOrTruncateTillPrefix "tk ")
+                , ((myModMask, xK_d), cycleDictionaryForDPrompt Next)
+                , ((myModMask, xK_s), cycleDictionaryForDPrompt Prev)
             ]})
     , ("M-y", initMatches >>= \r -> mkFMCPrompt (myXPConfigWithQuitKey (myModMask, xK_y) r) {
             autoComplete = Just 0
@@ -2852,7 +2967,6 @@ promptCommands =
     [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow a)
     | (mf, p, a) <- [ ("", "Go to window: ", deminimizeFocus)
                     , ("S-", "Bring window: ", shiftWindowsHere . wrapList)
-                    , ("C-", "Delete window: ", focusNextKillWindow)
                     ]
     ]
 
@@ -2867,16 +2981,32 @@ miscCommands toggleFadeSet =
     , ("M-S-<R>", withFocused $ keysAbsResizeWindow (10,0) (0,0))
     , ("M-S-<U>", withFocused $ keysAbsResizeWindow (0,-10) (0,0))
     , ("M-S-<D>", withFocused $ keysAbsResizeWindow (0,10) (0,0))
+    -- management of multiple screens
+    ]
+    ++
+    [ ("M-"++mk++"e", f)
+    | (mk, f) <- [ ("", onNextNeighbour W.view)
+                 , ("S-", onSelectedWindowsAfterMovingToTmpSpace $ \wins -> onNextNeighbour $ \t s -> foldr (W.shiftWin t) s wins)
+                 , ("C-", onNextNeighbour W.greedyView)]
+    ]
+    ++
+    [
     -- }}}
-    , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
-    , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+      ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+    -- ugly interface to window activate, which tries to activate the window given by the title under ~/.xmonad/.winactivate
+    , ("M-C-M1-x", do
+            lns <- fmap lines $ io (readFile "/home/lingnan/.xmonad/.winactivate") `catchX` (return "")
+            case lns of
+                 h:_ -> deminimizeFocus (read h) `catchX` (return ())
+                 _ -> return ()
+      )
     ----- wallpaper invoke -- {{{
     , ("M-z", initMatches >>= \r -> mkWPPrompt toggleFadeSet (myXPConfigWithQuitKey (myModMask .|. controlMask, xK_Return) r) {
           autoComplete = Just 0
         , searchPredicate = repeatedGrep
     })
     -- kill command (note this is different from the standard cut
-    , ("M-x", getSelectedWindowStack >>= focusNextKillWindows . W.integrate')
+    , ("M-x", onSelectedWindows killWindows)
     , ("M-M1-q", spawn myRestartCmd)
     -- we should also kill the processes and then exit
     , ("M-M1-S-q", spawn myKillCmd >> io (exitWith ExitSuccess))
@@ -3084,7 +3214,7 @@ getSelectedWindowStack' useFocusStackOnly = do
                         (_, Just f) -> (W.differentiate [f], Nothing)
                         _ -> (Nothing, Nothing)
 
-getSelectedWindowStack = fmap fst (getSelectedWindowStack' False)
+getSelectedWindowStack = fmap fst $ getSelectedWindowStack' False
 
 applySelectedWindowStack :: Bool -> (Maybe (W.Stack Window) -> X ()) -> X ()
 applySelectedWindowStack reversal fun = do
@@ -3110,7 +3240,7 @@ applySelectedWindowStack reversal fun = do
     -- refresh 
     refresh
 
-paste invertInsert normalP register = do
+paste invertInsert normalP xls register = do
     InsertOlderToggle t <- XS.get
     wins <- case register of 
                  -- use the default register
@@ -3125,7 +3255,7 @@ paste invertInsert normalP register = do
                              "1" -> mvWindows "\"" mv rep
                              _ -> mvWindows (show $ (read t)-1) mv rep
                      mvWindows "9" mv []
-                 _ -> orderedWindowsMatchingPredicate (hasTagQuery register) 
+                 _ -> xls
     if not (null wins)
        then do
             markWindowsSelection wins
@@ -3137,9 +3267,18 @@ paste invertInsert normalP register = do
                  (True, False) -> shiftWindowsHereAndFocusLast False Nothing wins
        else return ()
 
+-- restoreMinimizedWindowsAndSelect' [] = return ()
+-- restoreMinimizedWindowsAndSelect' wins = markWindowsSelection wins >> mapM_ deminimizeFocus wins 
+-- restoreMinimizedWindowsAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect'
+-- restoreMinimizedWindowAndSelect = getCurrentMinimizedWindows >>= restoreMinimizedWindowsAndSelect' . wrapList . head
+--
+-- calling minimize windows assume that you've already handled the focus problem gracefully
+-- minimizeWindows' tag ls = mapM_ (\w -> routeMessageToWS ((==tag).W.tag) (MinimizeWin w)) ls
+    -- clear the focus if necessary
 -- a register of "" means no register shall be used (in that case we just push into the default list of registers
-cut register wins = do
-    minimizeWindows wins
+cut register ls = flip correctFocus ls $ \wins -> do
+    deleteWindowsSelection wins
+    mapM_ minimizeWindow wins
     if register /= ""
        -- put these windows into that register
        then putWindowsIntoRegister register wins 
@@ -3147,8 +3286,8 @@ cut register wins = do
                     -- we should check if this is the only tag the windows have
                      "9" -> filterM (\w -> do
                             ts <- getTags w
-                            return $ ts == ["9"] 
-                         ) rep >>= focusNextKillWindows
+                            return $ ts == []
+                         ) rep >>= killWindows
                      _ -> mvWindows (show $ (read t)+1) mv rep 
             -- pushing these windows into 1, 1->2, 9 out of the memory
             in mvWindows "1" mv wins 
