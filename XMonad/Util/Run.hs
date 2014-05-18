@@ -27,7 +27,7 @@ module XMonad.Util.Run (
                           safeRunInTerm,
                           seconds,
                           spawnPipe,
-
+                          escapeQuery,
                           hPutStr, hPutStrLn  -- re-export for convenience
                          ) where
 
@@ -54,8 +54,7 @@ import Control.Monad
 -- | Returns the output.
 runProcessWithInput :: MonadIO m => FilePath -> [String] -> String -> m String
 runProcessWithInput cmd args input = io $ do
-    (pin, pout, perr, _) <- runInteractiveProcess (encodeString cmd)
-                                            (map encodeString args) Nothing Nothing
+    (pin, pout, perr, _) <- runInteractiveProcess cmd args Nothing Nothing
     hPutStr pin input
     hClose pin
     output <- hGetContents pout
@@ -156,3 +155,11 @@ spawnPipe x = io $ do
           executeFile "/bin/sh" False ["-c", encodeString x] Nothing
     closeFd rd
     return h
+
+escapeq "" = ""
+escapeq (m:ms) = case m of
+                          '\'' -> "'\"'\"'" ++ escapeq ms
+                          _ -> [m] ++ escapeq ms
+
+escapeQuery m = '\'' : ((escapeq m) ++ "'")
+                          

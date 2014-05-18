@@ -94,6 +94,7 @@ module XMonad.Layout.Groups ( -- * Usage
                             , moveSubGroupToGroupDown
                             , splitSubGroupUp
                             , splitSubGroupDown
+                            , sortWindows
                             ) where
 
 import XMonad
@@ -106,6 +107,7 @@ import qualified Data.List as L ((\\), maximumBy, find, filter)
 import Data.Maybe (isJust, isNothing, fromMaybe, catMaybes, fromJust)
 import Data.Either
 import Data.Tuple
+import Data.List (sortBy)
 import Text.Read
 import Control.Arrow ((>>>))
 import Control.Applicative ((<$>))
@@ -995,6 +997,17 @@ splitGroup l0 z@(Just s) | G l (Just ws) <- W.focus s
                                      g2 = G l0 $ Just $ W.Stack d [] down
                                  in insertUpZ g1 $ onFocusedZ (const g2) z
 splitGroup _ _ = Nothing
+
+-- sort the windows in the focused group
+sortWindows :: (Window -> String) -> ModifySpec
+sortWindows fun _ (Just s@(W.Stack (G l (Just f)) _ _))
+    = let wins = sortBy (\a b -> compare (fun a) (fun b)) $ W.integrate f
+          fw = W.focus f
+          st = case break (==fw) wins of
+                    (bs, nf:as) -> Just $ W.Stack nf (reverse bs) as
+                    (bs, _) -> W.differentiate bs
+      in Just s { W.focus = G l st }
+sortWindows _ _ gs = gs
 
 collapse :: ModifySpec
 collapse _ (Just (W.Stack (G l (Just (W.Stack f u d))) up down)) = Just $ W.Stack (G l $ Just $ W.Stack f (u ++ (reverse $ flatten up)) (d ++ flatten down)) [] []

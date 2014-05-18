@@ -34,8 +34,10 @@ instance XPrompt FMCPrompt where
     showXPrompt FMCPrompt = "fmc > "
     commandToComplete FMCPrompt = id
     nextCompletion FMCPrompt c l = if null l then c else compls
-                                        where lastArg = last $ parseArgs c
-                                              firstArg = head $ parseArgs c
+                                        where args = parseArgs c
+                                              firstArg = head args
+                                              tailArgs = tail args
+                                              lastArg = if null tailArgs then "" else last tailArgs
                                               compls 
                                                 | firstArg `isPrefixOf` fmcBitRate && (head l) `elem` fmcAllowedBitRates = "kbps " ++ (l !! exactMatchIndex)
                                                 | firstArg `isPrefixOf` fmcSetch = "setch " ++ (head $ parseArgs (l !! nextChNumMatchIndex))
@@ -74,6 +76,7 @@ fmcAction s =
         cmd = if cmd' `isCmdPrefixOf` fmcSetch then fmcSetch
                                             else if cmd' `isCmdPrefixOf` fmcBitRate then fmcBitRate
                                             else cmd'
-    in spawn $ "fmc '" ++ cmd ++ " " ++ arg ++ "'"
+        script = "fmc " ++ cmd ++ " " ++ escapeQuery arg
+    in spawn script
 
 mkFMCPrompt c = mkXPrompt FMCPrompt c fmcComplFunc fmcAction
