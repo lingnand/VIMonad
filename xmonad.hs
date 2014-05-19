@@ -391,7 +391,8 @@ uniqueWeechat = uniqueTerm [singletonContext] "loader weechat-curses -r '/redraw
 -- The temp buffer is the default workspace and will never be recycled (make sure that it should proceed other buffers in the sequence
 tmpWorkspaceTag = "`"
 quickWorkspaceTagEnd = "0"
-quickWorkspaceTags = map (\c -> [c]) $ takeWhile ((>=) ei. fromSymbol) symbolStream
+quickWorkspaceTags = map wrapList quickWorkspaceSequence
+quickWorkspaceSequence = takeWhile ((ei >=) . fromSymbol) symbolStream
     where ei = fromSymbol $ head quickWorkspaceTagEnd
 -- The symbolSequence replaces the originalSequence in the locale, thus enabling custom sorting
 originalSequence = "-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
@@ -399,14 +400,16 @@ symbolSequence = "./6-=`123457890:;<>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
 -- the workspace tags are implemented as a sliding window across the symbol stream; at any instant the tags are a list counting from a specific symbol
 symbolStream = symbolFrom $ head tmpWorkspaceTag
 -- the starting symbol SHOULD be the tmpWorkspaceTag
-validSymbol = (<=) (fromSymbol $ head symbolSequence) . fromSymbol
+validSymbol = ((fromSymbol $ head symbolSequence) <=) . fromSymbol
 
 --- subgroup symbol sequence: we eliminated '`' due to its ugliness from the subgroup indexing stream; and note that the sub group doesn't necessarily need an index after all
 subgroupSymbolSequence = "1234567890-="
-columngroupSymbolSequence = "123457890-="
+extendedSequence s = filter (not . (`elem` s)) typeables
+fullSequence s = s ++ extendedSequence s
+columngroupSymbolSequence = "1234567890-="
 indexToSymbol s n = if n >= 0 && n < length s then Just [s !! n] else Nothing
-subgroupIndexToSymbol = indexToSymbol subgroupSymbolSequence
-columngroupIndexToSymbol = indexToSymbol columngroupSymbolSequence
+subgroupIndexToSymbol = indexToSymbol $ fullSequence subgroupSymbolSequence
+-- columngroupIndexToSymbol = indexToSymbol columngroupSymbolSequence
 
 -- validWS is the workspace that are considered open to user (not including "NSP" in the obvious sense)
 validWS = (/= scratchpadWorkspaceTag) . W.tag 
@@ -1024,6 +1027,12 @@ allWorkspaceNames = do
     mapM getWorkspaceNameForTag ts
 
 allWorkspaces = filterWorkspaces validWS
+workspaceStack = do
+    wss <- allWorkspaces
+    curr <- gets (W.currentTag . windowset)
+    return $ case break ((==curr) . W.tag) wss of
+                    (bf, c:af) -> Just $ W.Stack c (reverse bf) af
+                    _ -> Nothing
 
 filterWorkspaces p = do
     ws <- gets windowset 
@@ -1098,12 +1107,12 @@ instance Show WorkspaceInsertPosition where
     show Head = "insert head"
     show Last = "insert last"
 
-idleWorkspace insp = do
+idleWorkspace allowIdle insp = do
     curr <- currWorkspace
     wss <- fmap (filter ((/=tmpWorkspaceTag) . W.tag)) allWorkspaces
     p <- isRecyclableWS
     let currTag = W.tag curr
-    if p curr 
+    if p curr && allowIdle
        then return currTag
        else do
            let (candi, insi, ch) = case (insp, findIndex ((== (W.tag curr)) . W.tag) wss) of
@@ -1112,7 +1121,7 @@ idleWorkspace insp = do
                                 (Last, _) -> (length wss - 1, length wss, nextSymbol $ head $ W.tag $ last wss)
                                 _ -> (0, 0, nextSymbol $ head tmpWorkspaceTag)
                cand = wss !! candi
-           if candi >= 0 && candi < length wss && p cand
+           if candi >= 0 && candi < length wss && p cand && allowIdle
               then return $ W.tag cand
               else do
                   renameWorkspaces $ zip (fmap W.tag $ snd $ splitAt insi wss) $ fmap wrapList $ tail $ symbolFrom ch
@@ -1128,7 +1137,7 @@ findWorkspaceWithName n insp = do
          Nothing -> reuseHiddenIdleWorkspaceWithName n insp
 
 reuseHiddenIdleWorkspaceWithName n insp = do
-    t <- idleWorkspace insp
+    t <- idleWorkspace (n /= "") insp
     setWorkspaceNameByTag t n
     return t
 
@@ -1206,12 +1215,7 @@ onSelectedWindows a = do
     (st, _) <- getSelectedWindowStack' False
     a $ W.integrate' st
 
--- we can 
-moveToWorkspace tag = do
-    t <- quickWorkspace tag 
-    -- first get the selection stack
-    onSelectedWindowsAfterMovingToTmpSpace $ \wins -> 
-        windows $ \s -> foldr (W.shiftWin t) s wins
+shiftWins t wins s = foldr (W.shiftWin t) s wins
 
 -- the workspace prompt works by first returning all the completions for the current workspace; if there are no suitable completions, it automatically gives back results from "symtag print '%t' <tag>"
 -- upon successfully creating a workspace, it will set the workspaceDirectory using the path given by "symtag print '%p' <tag> | head -n 1"
@@ -1288,36 +1292,27 @@ renameWorkspacePrompt conf = workspacePrompt conf "Rename workspace" (\t n -> se
 wrapList c = [c]
 
 removeCurrentWorkspace = gets (W.currentTag . windowset) >>= removeWorkspace
-removeWorkspace tag = do
+removeWorkspace = removeWorkspaces . wrapList
+removeAllWorkspaces = allWorkspaceTags >>= removeWorkspaces
+removeWorkspaces tags = do
     -- remove all windows
-    wss <- allWorkspaces
+    wst <- workspaceStack
     curr <- gets (W.currentTag . windowset)
-    let (ws, nws, aft) = case break ((==tag) . W.tag) wss of
-                         ([], []) -> (Nothing, Nothing, [])
-                         (_, ws:h:aft) -> (Just ws, Just h, h:aft)
-                         ([], ws:aft) -> (Just ws, Nothing, aft)
-                         (ls, ws:aft) -> (Just ws, Just $ last ls, aft)
-                         (ls, _) -> (Nothing, Just $ last ls, [])
-    case ws of
-         Nothing -> return ()
-         Just w -> do
-            -- the minimize is not really working
-            -- minimizeWindows' tmpWorkspaceTag winsToKill
-            killWindows $ W.integrate' $ W.stack w
-            -- our methodology is simple, remove the current workspace and reorder the symbol stream for the tags
-            -- so this involves repairing the tags with the associated handles
-            -- we can savely remove the workspace if all the workspaces after this workspace are empty
-            if  (W.tag w) /= tmpWorkspaceTag 
-               then do
-                    if curr == tag then maybe (return ()) (windows . W.greedyView . W.tag) nws 
-                                   else return ()
-                    -- kill the scratchpads matching this workspace
-                    ifWindows (isPerWSScratchpadBoundToWS tag) (mapM_ killWindow) (return ())
-                    windows $ removeWorkspaceByTag tag
-                    removeWorkspaceHandleByTag tag
-                    renameWorkspaces (zip (fmap W.tag aft) $ fmap wrapList $ symbolFrom $ head tag)
-                -- we'd like to remove the name and directory setting for the temp workspace in that case
-               else setWorkspaceNameByTag tag "" >> saveWorkspaceDirectory "" tag
+    let todel = filter (dp tags) $ W.integrate' wst
+        ntags = filter (/= tmpWorkspaceTag) tags
+        dp ts = (`elem` ts) . W.tag
+        nwst = maybeToMaybe (W.filter (not . dp ntags)) wst
+    killWindows $ concatMap (W.integrate' . W.stack) todel
+    case nwst of
+         Just (W.Stack nf _ _) | nft /= curr -> windows $ W.greedyView nft
+                where nft = W.tag nf
+         _ -> return ()
+    -- kill the scratchpads matching this workspace
+    mapM_ (\t -> ifWindows (isPerWSScratchpadBoundToWS t) (mapM_ killWindow) (return ())) ntags
+    windows $ \s -> foldr removeWorkspaceByTag s ntags
+    renameWorkspaces (zip (fmap W.tag (W.integrate' nwst)) $ fmap wrapList $ symbolStream)
+    if length ntags < length tags then setWorkspaceNameByTag tmpWorkspaceTag "" >> saveWorkspaceDirectory "" tmpWorkspaceTag
+                                  else return ()
 
 -- assume that the workspace to be removed is in the hidden workspaces list
 removeWorkspaceByTag t s@(W.StackSet { W.hidden = hs })
@@ -1747,6 +1742,8 @@ dpromptAction c cmds home hist s =
         in case (findWidgetForAction s, args) of
                 (Just (rest, w), _) -> (promptAction w) rest
                 (_, [('m':pre:[]), pa]) -> spawn $ myScriptsDir++"/xshortcut mark "++[pre]++" "++pa
+                (_, "reboot":_) -> removeAllWorkspaces >> spawn "reboot"
+                (_, "systemctl":"poweroff":_) -> removeAllWorkspaces >> spawn "systemctl poweroff"
                 (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do
                                  d <- if null pas 
                                          then return home 
@@ -2451,9 +2448,11 @@ appendMap fun ls = ls ++ fmap fun ls
 appendActionWithException a ex ls = ex ++ fmap (\(k, ka) -> (k, ka >> a ka)) ls
 
 -- the normal typableChars
-typeables = typeablesWithoutAlphas++alphas
+typeables = alphas ++ typeablesWithoutAlphas
 alphas = ['a'..'z']++['A'..'Z']
-typeablesWithoutAlphas = ['0'..'9']++"!@#$%^&*()-_=+\\|`~[{]}'\",<.>?"
+nums = ['0'..'9']
+syms = "!@#$%^&*()-_=+\\|`~[{]};:'\",<.>?"
+typeablesWithoutAlphas = nums ++ syms
 typeableKeyStrokes = fmap charToKeyStroke typeables
 
 charToKeyStroke c = if isUpper c then "S-"++[toLower c]
@@ -2474,6 +2473,7 @@ charToKeyStroke c = if isUpper c then "S-"++[toLower c]
                                            '~' -> "S-`"
                                            '{' -> "S-["
                                            '}' -> "S-]"
+                                           ':' -> "S-;"
                                            '"' -> "S-'"
                                            '<' -> "S-,"
                                            '>' -> "S-."
@@ -2509,9 +2509,11 @@ hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 -- implementing the motion keys list
 -- we don't allow 0 because that is kept for use as d0
 numberKeys = zip (fmap show [1..9]) [1..9]
-tabKeys = [ (fromJust $ subgroupIndexToSymbol n, n) | n <- [0..(length subgroupSymbolSequence - 1)] ]
-columnKeys = [ (fromJust $ columngroupIndexToSymbol n, n) | n <- [0..(length columngroupSymbolSequence - 1)] ]
-groupKeys = zip (fmap show [1..9]) [0..9]
+tabKeys = zip (fmap wrapList subgroupSymbolSequence) [0..]
+extendedTabKeys = zip (fmap charToKeyStroke $ extendedSequence subgroupSymbolSequence) [length tabKeys..]
+columnKeys = zip (fmap wrapList columngroupSymbolSequence) [0..]
+extendedColumnKeys = zip (fmap charToKeyStroke $ extendedSequence columngroupSymbolSequence) [length columnKeys..]
+groupKeys = zip (fmap show [1..9]) [0..]
 feedReg k fun = fmap Just $ fun k
 wrapInclude = fmap (\a -> (a, True))
 getCurrentMinimizedWindowsWithoutRegs = getCurrentMinimizedWindows >>= filterM (fmap null . getTags)
@@ -2563,6 +2565,7 @@ data Motion = Motion {
           target :: Maybe (Window, Bool)
         , simpleX :: Maybe (X ())
         , toggleList :: Maybe [Window]
+        , implicitToggleList :: Maybe [Window]
         , historyToggle :: Maybe (X ())
         , triggerOnNothing :: Maybe (X ())
         , searchFunction :: Maybe (Direction1D -> X (Maybe (Window, Bool)))
@@ -2572,54 +2575,66 @@ instance Default Motion where
           target = Nothing
         , simpleX = Nothing
         , toggleList = Nothing
+        -- an implicitToggleList is different from toggleList in that it captures the range of windows of the 
+        , implicitToggleList = Nothing
         , historyToggle = Nothing
         , triggerOnNothing = Nothing
         , searchFunction = Nothing
         }
 -- motion keys are usually only obtained through X (). This is because there are a bunch of things to calculate
+clamp i a b = if a <= b then Just $ max (min i b) a else Nothing
 motionKeys :: [(String, String, X Motion)]
 motionKeys = 
     -- M1 toggles
     [ (sfk++t, fk++t, do
-             ls <- getBaseCurrentWindows
-             let len = length ls
-                 w = ls !! ind
-                 ind = (min (len-1) n) `mod` len
-                 def' = def { simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt ind }
-             return $ case (len, leap) of
-                          (0, _) -> def
-                          (_, False) -> def' { target = Just (w, True) }
-                          _ | n >= len -> def
-                            | otherwise -> def' { target = Just (w, True) 
-                                                , toggleList = Just [w]
-                                                , historyToggle = Just $ nextMatch History $ isOneOfWindows ls 
-                                                }
+             st <- getBaseCurrentStack
+             case st of
+                  Just (W.Stack _ u _) | n < len -> 
+                        return def { target = t
+                                   , simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt ind
+                                   , toggleList = if leap then Just [w] else Nothing
+                                   , historyToggle = if leap 
+                                                        then Just $ nextMatch History $ isOneOfWindows $ ls
+                                                        else Nothing
+                                   }
+                             where ls = W.integrate' st
+                                   len = length ls
+                                   w = ls !! ind
+                                   t = Just (ls !! ind, True)
+                                   ind = n `mod` len
+                  _ -> return def
       )
     | (sfk, fk, leap, quick) <- [("M1-", "M1-", True, False), ("f ", "M-f ", False, False), ("", "M-g ", False, True)]
-    , (t, n) <- if quick then [("0", 0), ("S-4", -1)] else tabKeys
+    , (t, n) <- if quick then [("0", 0), ("S-4", -1)] 
+                         else tabKeys ++ if leap then [] else extendedTabKeys
     ]
     -- C- toggles
     ++
     [ (sfk++c, fk++c, do
              gs <- G.getCurrentGStack
-             let def' = def {simpleX = Just $ sendMessage $ G.Modify $ G.focusGroupAt n}
              case gs of
-                  Just (G.Node s) -> let ls = W.integrate s
-                                         len = length ls
-                                         g = ls !! (min (len-1) n)
-                                         w = G.focal g 
-                                     in return $ case (len, leap) of
-                                                    (0, _) -> def
-                                                    (_, False) -> def' { target = fmap (\a -> (a,True)) w }
-                                                    _ | n >= len -> def
-                                                      | otherwise -> def' { target = fmap (\a -> (a,True)) w
-                                                                          , toggleList = Just $ G.flattened g
-                                                                          , historyToggle = Just $ toggleGroup
-                                                                          }
+                  Just (G.Node s@(W.Stack _ u _)) | n < len -> 
+                        return def { target = t
+                                   , simpleX = Just $ sendMessage $ G.Modify $ G.focusGroupAt ind
+                                   , toggleList = if leap then Just $ G.flattened g else Nothing
+                                   , implicitToggleList = if leap then Nothing else Just $ concatMap G.flattened $ drop si $ take (ei+1) ls
+                                   , historyToggle = if leap 
+                                                        then Just $ toggleGroup
+                                                        else Nothing
+                                   }
+                            where ls = W.integrate s
+                                  len = length ls
+                                  ind = n `mod` len
+                                  ci = length u
+                                  (si, ei) = if ci < ind then (ci, ind) else (ind, ci)
+                                  g = ls !! ind
+                                  w = G.focal g 
+                                  t = fmap (\a -> (a, True)) w
                   _ -> return def
       )
-    | (c, n) <- columnKeys 
-    , (sfk, fk, leap) <- [("C-", "C-", True), ("S-f ", "M-S-f ", False)]
+    | (sfk, fk, leap, quick) <- [("C-", "C-", True, False), ("f C-", "M-f C-", False, False), ("g ", "M-g ", False, True)]
+    , (c, n) <- if quick then [("C-0", 0), ("C-4", -1)] 
+                         else columnKeys ++ if leap then [] else extendedColumnKeys
     ]
     ++
     -- perform the saved find function forward and backwards
@@ -2637,10 +2652,12 @@ motionKeys =
                mfs <- getFocusStack
                let sign' = if dir == Next then sign else sign * (-1)
                return $ case mfs of
-                       Just (W.Stack f u d) -> Just (Just (ls !! ind, include), ind)
+                       Just (W.Stack f u d) | isJust mind -> Just (Just (ls !! ind, include), ind)
                             where ci = length u
                                   ls = W.integrate' mfs 
-                                  ind = (ci + sign' * n) `mod` (length ls)
+                                  -- turning off the wrapping function
+                                  mind = clamp (ci + sign' * n) 0 (length ls - 1)
+                                  ind = fromJust mind
                        _ -> Nothing
               move = fmap (maybeToMaybe fst) . move'
           in move' Next >>= \mt -> return $ case mt of
@@ -2660,15 +2677,19 @@ motionKeys =
         -- get the second level nesting counting from the top
         ins <- focusIsInGStack
         bs <- fmap (maybeToMaybe G.bases . maybeToMaybe G.current) G.getCurrentGStack
-        let (t, ind) = case (ins, bs) of
-                             (True, Just (G.Node s)) -> (fmap (\a -> (a, True)) $ G.focal $ ls !! ind', ind')
+        let (t, ind, tls) = case (ins, bs) of
+                             (True, Just (G.Node s@(W.Stack _ u _))) -> (fmap (\a -> (a, True)) $ G.focal $ ls !! ind', ind', concatMap G.flattened $ drop si $ take (ei+1) ls)
                                 where ls = W.integrate s
                                       len = length ls
                                       ind' = (min n (len-1)) `mod` len
-                             _ -> (Nothing, -1)
+                                      ci = length u
+                                      (si, ei) = if ci < ind' then (ci, ind') else (ind', ci)
+                             _ -> (Nothing, -1, [])
         return def {
                   target = t
-                , simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt ind
+                , simpleX = if isJust t then Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt ind else Nothing
+                -- select everything in between
+                , implicitToggleList = Just tls
             }
       )
     | (sfk, fk, n) <- [("g g", "M-g g", 0)] 
@@ -2676,7 +2697,7 @@ motionKeys =
                       [ (nk++" S-g", "M-g "++nk++" S-g", n')
                       | (nk, n') <- groupKeys] 
                       ++
-                      [ ("g S-g", "M-g S-g", -1)]
+                      [ ("S-g", "M-g S-g", -1)]
     ]
     -- the h j k l's
     ++
@@ -2686,18 +2707,25 @@ motionKeys =
                   ins <- focusIsInGStack
                   bs <- fmap gfun G.getCurrentGStack
                   return $ case (ins, bs) of
-                      (True, Just (G.Node s@(W.Stack _ up _))) -> Just ((fmap (\a -> (a, True)) $ G.focal $ ls !! ind), ind)
+                      (True, Just (G.Node s@(W.Stack _ up _))) | isJust mind -> 
+                                (Just ((fmap (\a -> (a, True)) $ G.focal $ ls !! ind), ind), concatMap G.flattened $ drop si $ take (ei+1) ls)
                          where ls = W.integrate s 
                                len = length ls
                                ci = length up
-                               ind = (ci + sign * n) `mod` len
-                      _ -> Nothing
-              move = fmap (maybeToMaybe fst) . move'
+                               -- turning off the wrapping
+                               mind = clamp (ci + sign * n) 0 (length ls - 1)
+                               ind = fromJust mind
+                               (si, ei) = if ci < ind then (ci, ind) else (ind, ci)
+                      _ -> (Nothing, [])
+              move = fmap (maybeToMaybe fst . fst) . move'
           in move' Next >>= \mt -> return $ case mt of
-                    Just (t, ind) -> def { target = t
-                                         -- , searchFunction = Just move
-                                         , simpleX = Just (sx ind)
-                                     }
+                    (Just (t, ind), ls) -> 
+                                def { target = t
+                                    -- , searchFunction = Just move
+                                    , simpleX = Just (sx ind)
+                                    -- select everything in the consecutive row/col
+                                    , implicitToggleList = Just ls
+                                    }
                     _ -> def
       )
     | (nk, n) <- numberKeys
@@ -2709,7 +2737,8 @@ motionKeys =
     , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
     ++
-    [ (px++"g "++filterKey g, "M-"++px++"g "++filterKey g, do
+    -- group toggling
+    [ ("g "++filterKey g, "M-"++px++"g "++filterKey g, do
             -- the cycling and toggling would require different techniques
             let move dir = wrapAroundWindowsMatchingPredicate (if dir == d then Next else Prev) (fmap not isFocused <&&> localFirstFilterPredicate g) 
                             >>= return . fmap (\a->(a,True)) . listToMaybe
@@ -2726,6 +2755,7 @@ motionKeys =
     , (px, d) <- [("", Next), ("S-", Prev)]
     ]
     ++
+    -- tag handling
     [ ("' "++tk, "M-g ' "++tk, do
             res <- ta $ \t -> do
                 ls <- xls t
@@ -2741,9 +2771,9 @@ motionKeys =
     | (tk, ta, _, xt, xls) <- regKeys ++ regPromptKeys "Select windows from register:" ++ regReadonlyKeys
     ]
 
-motionKeyCommands' = flip fmap motionKeys $ \(_, k, x) -> (k, do
+motionKeyCommands' = flip fmap (nubBy (\(_,a,_) (_,b,_)->a==b) motionKeys) $ \(_, k, x) -> (k, do
     mf <- gets (W.peek . windowset)
-    Motion mt simpx mtogls mtoggle mconstruct mfind <- x
+    Motion mt simpx mtogls _ mtoggle mconstruct mfind <- x
     -- first save the function for future reference
     case mfind of
          Just fun -> saveFindFunction fun
@@ -2763,14 +2793,15 @@ motionKeyCommands = concatMap processKey motionKeyCommands'
 
 -- return the normal selection for most of the commands
 windowSelectionForMotionKey key = maybe (return []) snd $ find ((==key) . fst) motionKeyWindowSelection
-motionKeyWindowSelection = flip fmap motionKeys $ \(k, _, x) -> (k, do
+motionKeyWindowSelection = flip fmap (nubBy (\(a,_,_) (b,_,_) -> a == b) motionKeys) $ \(k, _, x) -> (k, do
     mf <- gets (W.peek . windowset)
-    Motion mt _ mls _ _ _ <- x
-    case mls of
-         Just ls -> return ls
+    mt <- x
+    case (toggleList mt, implicitToggleList mt) of
+         (_, Just ls) -> return ls
+         (Just ls, _) -> return ls
          _ -> do
            wins <- allOrderedWindows
-           return $ case (mf, mt) of
+           return $ case (mf, target mt) of
                         (Just f, Just (t, include)) -> case (elemIndex f wins, elemIndex t wins) of
                                                  (Just fi, Just ti) | fi < ti -> drop fi $ take (ti + if include then 1 else 0) wins
                                                                     | fi == ti -> [f]
@@ -2831,8 +2862,11 @@ cutCommands = concatMap (processKey . addPrefix) $
                   ++
                   [ (fks, do
                       -- ta $ \t -> sequence_ $ take n $ repeat $ removeCurrentWorkspace' t
-                      sequence_ $ take n $ repeat $ removeCurrentWorkspace
-                      return ())
+                      wst <- workspaceStack
+                      let ls = case wst of
+                                  Just (W.Stack f _ d) -> [f]++d
+                                  _ -> []
+                      removeWorkspaces $ fmap W.tag $ take n ls)
                   | (fks, n) <- [ (pk++" "++wfk, n')
                                 | (nk, n') <- numberKeys
                                 , wfk <- [nk++" s"] ++ if n' == 1 then ["s"] else []
@@ -2844,6 +2878,39 @@ cutCommands = concatMap (processKey . addPrefix) $
     ++
     [ ("d M-"++t, removeWorkspace t)
     | t <- quickWorkspaceTags]
+    -- the find motion for workspaces
+    ++
+    [ ("d f M-"++charToKeyStroke t, do
+        ts <- allWorkspaceTags
+        curr <- gets (W.currentTag . windowset)
+        -- first we should try to locate the indices
+        case (elemIndex curr ts, elemIndex [t] ts) of
+             (Just ci, Just ti) -> removeWorkspaces $ drop si $ take (ei+1) ts
+                where (si, ei) = if ci < ti then (ci, ti) else (ti, ci)
+             _ -> return ())
+    | t <- fullSequence quickWorkspaceSequence ]
+    -- the g start and end motion for workspaces
+    ++
+    [ ("d g M-"++fk, do
+            ts <- allWorkspaceTags
+            curr <- gets (W.currentTag . windowset)
+            case (elemIndex curr ts, n `mod` (length ts)) of
+                 (Just ci, ti) -> removeWorkspaces $ drop si $ take (ei+1) ts
+                    where (si, ei) = if ci < ti then (ci, ti) else (ti, ci)
+                 _ -> return ())
+    | (fk, n) <- [("0", 0), ("4", -1)]]
+    -- the [ and ] motion
+    ++
+    [ ("d "++mk++dk, do
+            wst <- workspaceStack
+            let ls = case wst of
+                         Just (W.Stack f u d) -> if dir == Prev then [f]++u else [f]++d
+                         _ -> []
+            removeWorkspaces $ fmap W.tag $ take (n+1) ls)
+    | (nk, n) <- numberKeys
+    , mk <- [nk++" "] ++ if n == 1 then [""] else []
+    , (dk, dir) <- [("[", Prev), ("]", Next)]
+    ]
 
 yankCommands = concatMap (processKey . addPrefix) $
     [ (kstr, da)
@@ -2900,7 +2967,7 @@ cloneCommands = concatMap (processKey . addPrefix) $
     , (pk, fsk) <- zip (repeat "") ([nk++" "] ++ if n == 1 then [""] else [])
                    ++
                    [("g "++nk++" ", "")]
-    , g <- allTaskGroupsWithFilterKey $ ["c"] ++ if n /= 1 then [nk] else []
+    , g <- allTaskGroupsWithFilterKey $ ["c"] ++ if n /= 1 && pk == "" then [nk] else []
     ]
 
 historyCommands =
@@ -2923,7 +2990,7 @@ historyCommands =
 
 -- the layout commands are there to provide convenient access
 layoutCommands = 
-    [ ("C-S-"++k, sendMessage $ G.Modify $ G.moveToGroupAt n)
+    [ ("C-S-"++k, applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToGroupAt n s)
     | (k, n) <- columnKeys]
     ++
     [ ("M1-S-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.insertAt n)
@@ -2940,10 +3007,10 @@ layoutCommands =
     , ("M-C-S-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupDown)
     , ("M-C-S-h", sendMessage $ G.Modify G.swapGroupUp)
     , ("M-C-S-l", sendMessage $ G.Modify G.swapGroupDown)
-    , ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp s)
-    , ("M-S-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsDown s)
-    , ("M-S-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsUp s)
-    , ("M-S-l", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsDown s)
+    , ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp False s)
+    , ("M-S-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsDown False s)
+    , ("M-S-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsUp False s)
+    , ("M-S-l", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsDown False s)
 
     , ("M-C-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsToNewGroupUp s)
     , ("M-C-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsToNewGroupDown s)
@@ -3047,18 +3114,7 @@ miscCommands toggleFadeSet =
     , ("M-S-<R>", withFocused $ keysAbsResizeWindow (10,0) (0,0))
     , ("M-S-<U>", withFocused $ keysAbsResizeWindow (0,-10) (0,0))
     , ("M-S-<D>", withFocused $ keysAbsResizeWindow (0,10) (0,0))
-    -- management of multiple screens
-    ]
-    ++
-    [ ("M-"++mk++"e", f)
-    | (mk, f) <- [ ("", onNextNeighbour W.view)
-                 , ("S-", onSelectedWindowsAfterMovingToTmpSpace $ \wins -> onNextNeighbour $ \t s -> foldr (W.shiftWin t) s wins)
-                 , ("C-", onNextNeighbour W.greedyView)]
-    ]
-    ++
-    [
-    -- }}}
-      ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
+    , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
     -- ugly interface to window activate, which tries to activate the window given by the title under ~/.xmonad/.winactivate
     , ("M-C-M1-x", do
             lns <- fmap lines $ io (readFile "/home/lingnan/.xmonad/.winactivate") `catchX` (return "")
@@ -3071,49 +3127,58 @@ miscCommands toggleFadeSet =
           autoComplete = Just 0
         , searchPredicate = repeatedGrep
     })
-    , ("<F10>", spawn "amixer get Master | fgrep '[on]' && amixer set Master mute || amixer set Master unmute")
+    , ("<F10>", spawn $ "amixer get Master | fgrep '[on]' && amixer set Master mute || amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
     , ("<F11>", spawn $ "amixer set Master 5-; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
     , ("<F12>", spawn $ "amixer set Master 5+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
     ]
 
-workspaceCommands = 
-    [ ("M-6", lastWorkspaceTag >>= windows . W.view )
-    , ("M-S-6", lastWorkspaceTag >>= windows . W.shift)
-    , ("M-C-6", lastWorkspaceTag >>= swapWith)
-    -- , ("M-4", allWorkspaceTags >>= toggleTag . last >>= windows . W.view)
-    -- , ("M-S-4", allWorkspaceTags >>= toggleTag . last >>= windows . W.shift)
-    -- , ("M-C-4", allWorkspaceTags >>= toggleTag . last >>= swapWith)
+workspaceCommands = concatMap (processKey . addPrefix) $
+    [ (pk++mk++wk, gt >>= flip whenJust ta) 
+    | (mk, ta) <- [ ("", windows . W.greedyView)
+                  , ("S-", \t -> onSelectedWindowsAfterMovingToTmpSpace $ \wins ->  windows (shiftWins t wins)) 
+                  , ("C-", swapWith)
+                  ]  
+    , (pk, wk, gt) <- [("", "6", fmap Just lastWorkspaceTag)]
+                      ++
+                      [ (pk', dk, do
+                          st <- workspaceStack
+                          let (ls, mct) = case st of
+                                               Just (W.Stack f us ds) -> (if d == Prev then us else ds, Just $ W.tag f)
+                                               _ -> ([], Nothing)
+                              mn' = clamp (n - 1) 0 (length ls - 1)
+                              mft = fmap (W.tag . (ls !!)) mn'
+                          return $ if mft == mct then Nothing else mft)
+                      | (dk, d) <- [("[", Prev), ("]", Next)]
+                      , (nk, n) <- numberKeys
+                      , pk' <- ["g "++nk++" "] ++ if n == 1 then [""] else [] ]
+                      ++
+                      [ ("", t, fmap Just $ (if mk /= "S-" then toggleTag else quickWorkspace) t)
+                      | t <- quickWorkspaceTags]
     ]
+    -- the find motion (just for completeness)
     ++
-    [ (fsk, findWorkspace myWorkspaceSort d validWSType n >>= windows . W.greedyView)
-    | (k, d) <- [("[", Prev), ("]", Next)]
-    , (nk, n) <- numberKeys
-    , fsk <- [ "M-g "++nk++" "++k ] ++ if n == 1 then [ "M-"++k ] else []
+    [ ("f M-"++charToKeyStroke t, quickWorkspace [t] >>= windows . W.greedyView) 
+    | t <- fullSequence quickWorkspaceSequence ]
+    ++
+    -- workspace motion key g M-S-0 and g M-S-4
+    [ ("g M-0", allWorkspaceTags >>= windows . W.greedyView . head)
+    , ("g M-4", allWorkspaceTags >>= windows . W.greedyView . last) ]
+    ++
+    [ (mk++"e", f)
+    | (mk, f) <- [ ("", onNextNeighbour W.view)
+                 , ("S-", onSelectedWindowsAfterMovingToTmpSpace $ \wins -> onNextNeighbour $ \t -> shiftWins t wins)
+                 , ("C-", onNextNeighbour W.greedyView)]
     ]
-    ++
-    [ ("M-S-[", doTo Prev validWSType myWorkspaceSort (windows . W.shift))
-    , ("M-S-]", doTo Next validWSType myWorkspaceSort (windows . W.shift))
-    , ("M-C-[", modSwapTo Prev)
-    , ("M-C-]", modSwapTo Next)
     -- }}}
     ----- Loghook-- {{{
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
     -- }}}
-    ]
------ QuickWorkspace-- {{{
-    ++
-    [ ("M-"++m++t, f t)
-    | (m, f) <- [ ("", \t -> toggleTag t >>= viewWorkspace)
-                , ("S-", moveToWorkspace)
-                , ("C-", \t -> toggleTag t >>= swapWith)
-                , ("C-S-", moveGroupStackToWorkspace)] 
-    , t <- quickWorkspaceTags]
 
 snippetsDirectory = "/home/lingnan/.snippets/"
 retrieveSnippetCommands = flip E.catch (\(SomeException e) -> return []) $ do
     fs <- fmap (filter (not . (=~ "^\\."))) $ getDirectoryContents snippetsDirectory
     return $ concatMap (processKey . addPrefix) 
-        [ (pk++"a "++mk++(joinStr " " $ fmap charToKeyStroke s), spawn $ "str=\"`cat "++escapeQuery (snippetsDirectory ++ s)++"`\"; for i in {1.."++show n++"}; do res=\"$res$str\"; done; sleep 0.1; xdotool type \"$res\"")
+        [ (pk++"a "++mk++(joinStr " " $ fmap charToKeyStroke s), spawn $ "str=\"`cat "++escapeQuery (snippetsDirectory ++ s)++"`\"; res=\"$str\"; for ((i=1; i<"++show n++"; i++)); do res=\"$res $str\"; done; sleep 0.1; xdotool type \"$res\"")
         | s <- fs 
         , (nk, n) <- numberKeys
         , (pk, mk) <- zip (["g "++nk++" "] ++ if n == 1 then [""] else []) (repeat "")
