@@ -18,6 +18,8 @@ module XMonad.Prompt
       -- $usage
       mkXPrompt
     , mkXPromptWithReturn
+    , mkXPromptWithHistoryAndReturn
+    , readHistory
     , mkXPromptWithModes
     , def
     , amberXPConfig
@@ -71,6 +73,11 @@ module XMonad.Prompt
     , historyDownMatching
     -- * Types
     , XPState
+    , History
+    -- search predicates
+    , prefixSearchPredicate
+    , infixSearchPredicate
+    , repeatedGrep
     ) where
 
 import           XMonad                       hiding (cleanMask, config)
@@ -87,7 +94,7 @@ import           Control.Concurrent           (threadDelay)
 import           Control.Exception.Extensible as E hiding (handle)
 import           Control.Monad.State
 import           Data.Bits
-import           Data.Char                    (isSpace)
+import           Data.Char                    (isSpace, toLower)
 import           Data.IORef
 import           Data.List
 import qualified Data.Map                     as M
@@ -616,17 +623,19 @@ setInput = modify . setCommand
 getInput :: XP String
 getInput = gets command
 
+mkXPromptWithReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (String -> X a)  -> X (Maybe a)
+mkXPromptWithReturn t conf compl action = (io readHistory) >>= mkXPromptWithHistoryAndReturn t conf compl action
+
 -- | Same as 'mkXPrompt', except that the action function can have
 --   type @String -> X a@, for any @a@, and the final action returned
 --   by 'mkXPromptWithReturn' will have type @X (Maybe a)@.  @Nothing@
 --   is yielded if the user cancels the prompt (by e.g. hitting Esc or
 --   Ctrl-G).  For an example of use, see the 'XMonad.Prompt.Input'
 --   module.
-mkXPromptWithReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (String -> X a)  -> X (Maybe a)
-mkXPromptWithReturn t conf compl action = do
+mkXPromptWithHistoryAndReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (String -> X a) -> History  -> X (Maybe a)
+mkXPromptWithHistoryAndReturn t conf compl action hist = do
   XConf { display = d, theRoot = rw } <- ask
   s    <- gets $ screenRect . W.screenDetail . W.current . windowset
-  hist <- io readHistory
   w    <- io $ createWin d rw conf s
   io $ selectInput d w $ exposureMask .|. keyPressMask
   gc <- io $ createGC d w
@@ -953,8 +962,10 @@ emacsLikeXPKeymap' p ref = M.fromList $
   , (xK_bracketleft, quit)
   , (xK_BackSpace, killWord' p Prev) -- kill the previous word
   -- navigation
-  , (xK_n, historyDownMatching ref)
-  , (xK_p, historyUpMatching ref)
+  , (xK_n, historyDownMatchingP prefixSearchPredicate 0 ref)
+  , (xK_p, historyUpMatchingP prefixSearchPredicate 0 ref)
+  , (xK_semicolon, historyDownMatchingP repeatedGrep 1 ref)
+  , (xK_comma, historyUpMatchingP repeatedGrep 1 ref)
   , (xK_b, moveCursor Prev) -- move cursor forward
   , (xK_f, moveCursor Next) -- move cursor backward
   -- some vim bindings
@@ -1521,30 +1532,36 @@ deleteAllDuplicates, deleteConsecutive :: [String] -> [String]
 deleteAllDuplicates = nub
 deleteConsecutive = map head . group
 
-newtype HistoryMatches = HistoryMatches (IORef ([String],Maybe (W.Stack String)))
+newtype HistoryMatches = HistoryMatches (IORef ([String],Maybe (W.Stack String), Int))
 
 -- | Initializes a new HistoryMatches structure to be passed
 -- to historyUpMatching
+initMatches' :: (Functor m, MonadIO m) => Int -> m HistoryMatches
+initMatches' pid = HistoryMatches <$> liftIO (newIORef ([],Nothing,pid))
+-- default to initialize using pid 0, which corresponds to the prefix predicate matching
 initMatches :: (Functor m, MonadIO m) => m HistoryMatches
-initMatches = HistoryMatches <$> liftIO (newIORef ([],Nothing))
+initMatches = initMatches' 0
 
 historyNextMatching :: HistoryMatches -> (W.Stack String -> W.Stack String) -> XP ()
-historyNextMatching hm@(HistoryMatches ref) next = do
-  (completed,completions) <- io $ readIORef ref
+historyNextMatching = historyNextMatching' isPrefixOf 0
+
+historyNextMatching' :: (String -> String -> Bool) -> Int -> HistoryMatches -> (W.Stack String -> W.Stack String) -> XP ()
+historyNextMatching' predicate pid hm@(HistoryMatches ref) next = do
+  (completed,completions,oid) <- io $ readIORef ref
   input <- getInput
-  if input `elem` completed
+  if input `elem` completed && pid == oid
      then case completions of
             Just cs -> do
                 let cmd = W.focus cs
                 modify $ setCommand cmd
                 modify $ \s -> s { offset = length cmd }
-                io $ writeIORef ref (cmd:completed,Just $ next cs)
+                io $ writeIORef ref (cmd:completed,Just $ next cs, pid)
             Nothing -> return ()
      else do -- the user typed something new, recompute completions
-       io . writeIORef ref . ((,) [input]) . filterMatching input =<< gets commandHistory
-       historyNextMatching hm next
+       io . writeIORef ref . (\a -> ([input],a, pid)) . filterMatching input =<< gets commandHistory
+       historyNextMatching' predicate pid hm next
     where filterMatching :: String -> W.Stack String -> Maybe (W.Stack String)
-          filterMatching prefix = W.filter (prefix `isPrefixOf`) . next
+          filterMatching prefix = W.filter (prefix `predicate`) . next
 
 -- | Retrieve the next history element that starts with
 -- the current input. Pass it the result of initMatches
@@ -1563,6 +1580,10 @@ historyUpMatching, historyDownMatching :: HistoryMatches -> XP ()
 historyUpMatching hm = historyNextMatching hm W.focusDown'
 historyDownMatching hm = historyNextMatching hm W.focusUp'
 
+historyUpMatchingP, historyDownMatchingP :: (String -> String -> Bool) -> Int -> HistoryMatches -> XP ()
+historyUpMatchingP p pid hm = historyNextMatching' p pid hm W.focusDown'
+historyDownMatchingP p pid hm = historyNextMatching' p pid hm W.focusUp'
+
 -- LN: custom functions that are usualy useful for prompts
 findWord (w:ws) toMatch = w `elem` toMatch || findWord ws toMatch
 findWord [] toMatch = False
@@ -1570,3 +1591,13 @@ findWord [] toMatch = False
 fillSpace col s 
     | (length s) < col = fillSpace col (s++" ")
     | otherwise = s
+
+infixSearchPredicate cmd cpl = isInfixOf (map toLower cmd) (map toLower cpl) 
+
+prefixSearchPredicate cmd cpl = isPrefixOf (map toLower cmd) (map toLower cpl)
+
+-- an implementation for searchPredicate that will make sure all words typed are contained in the result
+repeatedGrep cmd cpl = all (`isInfixOf` lp) (words lc) 
+    where lc = map toLower cmd
+          lp = map toLower cpl
+

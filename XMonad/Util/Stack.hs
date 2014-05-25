@@ -32,7 +32,9 @@ module XMonad.Util.Stack ( -- * Usage
                          , insertUpZ
                          , insertDownZ
                          , swapUpZ
+                         , swapUpZ'
                          , swapDownZ
+                         , swapDownZ'
                          , swapMasterZ
                            -- ** Focus movement
                          , focusUpZ
@@ -136,16 +138,22 @@ insertDownZ a Nothing = W.differentiate [a]
 insertDownZ a (Just s) = Just s { W.focus = a, W.up = W.focus s : W.up s }
 
 -- | Swap the focused element with the previous one
+swapUpZ' :: Bool -> Zipper a -> Zipper a
+swapUpZ' _ Nothing = Nothing
+swapUpZ' _ (Just s) | u:up <- W.up s = Just s { W.up = up, W.down = u:W.down s}
+swapUpZ' True (Just s) = Just s { W.up = reverse (W.down s), W.down = [] }
+swapUpZ' _ (Just s) = Just s
 swapUpZ :: Zipper a -> Zipper a
-swapUpZ Nothing = Nothing
-swapUpZ (Just s) | u:up <- W.up s = Just s { W.up = up, W.down = u:W.down s}
-swapUpZ (Just s) = Just s { W.up = reverse (W.down s), W.down = [] }
+swapUpZ = swapUpZ' True
 
 -- | Swap the focused element with the next one
+swapDownZ' :: Bool -> Zipper a -> Zipper a
+swapDownZ' _ Nothing = Nothing
+swapDownZ' _ (Just s) | d:down <- W.down s = Just s { W.down = down, W.up = d:W.up s }
+swapDownZ' True (Just s) = Just s { W.up = [], W.down = reverse (W.up s) }
+swapDownZ' _ (Just s) = Just s
 swapDownZ :: Zipper a -> Zipper a
-swapDownZ Nothing = Nothing
-swapDownZ (Just s) | d:down <- W.down s = Just s { W.down = down, W.up = d:W.up s }
-swapDownZ (Just s) = Just s { W.up = [], W.down = reverse (W.up s) }
+swapDownZ = swapDownZ' True
 
 -- | Swap the focused element with the first one
 swapMasterZ :: Zipper a -> Zipper a

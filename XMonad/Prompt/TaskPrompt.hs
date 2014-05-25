@@ -2,6 +2,7 @@ module XMonad.Prompt.TaskPrompt
     ( mkTaskPrompt
     , TaskWarriorPrompt(..)
     , taskAction
+    , taskAction'
     , taskComplFunc
     ) where
 
@@ -14,6 +15,7 @@ import Data.List.Split
 import Data.Maybe
 import XMonad.Util.Run
 import XMonad.Hooks.DynamicLog (trim)
+import XMonad.Hooks.OnWindowsInserted
 
 ---- some constants here
 outputWidth = 200
@@ -119,11 +121,22 @@ instance XPrompt TaskWarriorPrompt where
                         taskId = head $ words cl
                         (behinds , lastVar) = lastId cmd  
 
--- check for the presence of action command, if there's no action command defaults to open the task
--- we will strip away the list commands at all times. Reason: to support dynamic viewing, when you switch to a new view (through one of the list command), you can continue through the list and no need to delete back (essentially list commands become another kind of filter)
-taskAction s = spawn $ "export EDITOR='xvim'; tk "++listCmdStrippedStr s++if noActionCmd then " open" else []
+taskAction' immi final owi s = 
+    let run = spawn $ "export EDITOR='xvim'; tk "++listCmdStrippedStr s++if noActionCmd then " open" else []
+        wait = noActionCmd || head cmdAfter `elem` ["open", "note"]
+    in if wait 
+          then applyOnWindowsInserted owi {
+                  numberOfWindows = 1
+                , logFinished = \a b -> do
+                    (logFinished owi) a b
+                    final
+            } >> run >> immi
+          else run >> immi >> final
     where noActionCmd = null cmdAfter
           (filters, cmdAfter) = break (\e -> e `elem` taskActionCmds++taskOtherCmds) $ parseArgs s
+-- check for the presence of action command, if there's no action command defaults to open the task
+-- we will strip away the list commands at all times. Reason: to support dynamic viewing, when you switch to a new view (through one of the list command), you can continue through the list and no need to delete back (essentially list commands become another kind of filter)
+taskAction = taskAction' (return ()) (return ()) def
 
 listCmdStrippedStr c = tail $ foldr ((++) . (" "++)) [] (listCmdStrippedArgs $ parseArgs c)
 

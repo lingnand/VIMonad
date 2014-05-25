@@ -29,7 +29,9 @@ module XMonad.Layout.Groups ( -- * Usage
                             , ModifySpec
                               -- ** Useful 'ModifySpec's
                             , swapUp
+                            , swapUpN
                             , swapDown
+                            , swapDownN
                             , swapWith
                             , swapWithLast
                             , insertAt
@@ -40,7 +42,9 @@ module XMonad.Layout.Groups ( -- * Usage
                             , focusAt
                             , focusLast
                             , swapGroupUp
+                            , swapGroupUpN
                             , swapGroupDown
+                            , swapGroupDownN
                             , swapGroupMaster
                             , focusGroupUp
                             , focusGroupDown
@@ -95,7 +99,7 @@ module XMonad.Layout.Groups ( -- * Usage
                             , moveSubGroupToGroupDown
                             , splitSubGroupUp
                             , splitSubGroupDown
-                            , sortWindows
+                            , modifyFocusedStack
                             ) where
 
 import XMonad
@@ -765,10 +769,14 @@ onFocused f _ gs = onFocusedZ (onZipper f) gs
 -- | Swap the focused window with the previous one.
 swapUp :: ModifySpec
 swapUp = onFocused swapUpZ
+swapUpN :: Int -> ModifySpec
+swapUpN i = onFocused $ (!! i) . iterate (swapUpZ' False)
 
 -- | Swap the focused window with the next one.
 swapDown :: ModifySpec
 swapDown = onFocused swapDownZ
+swapDownN :: Int -> ModifySpec
+swapDownN i = onFocused $ (!! i) . iterate (swapDownZ' False)
 
 -- | Swap the focused window with the i'th window (from the user's perspective
 swapWithZ :: Int -> Zipper a -> Zipper a
@@ -815,10 +823,15 @@ swapMaster = onFocused swapMasterZ
 -- | Swap the focused group with the previous one.
 swapGroupUp :: ModifySpec
 swapGroupUp _ = swapUpZ
+-- swap n times
+swapGroupUpN :: Int -> ModifySpec
+swapGroupUpN i _ = (!! i) . iterate (swapUpZ' False)
 
 -- | Swap the focused group with the next one.
 swapGroupDown :: ModifySpec
 swapGroupDown _ = swapDownZ
+swapGroupDownN :: Int -> ModifySpec
+swapGroupDownN i _ = (!! i) . iterate (swapDownZ' False)
 
 -- | Swap the focused group with the master group.
 swapGroupMaster :: ModifySpec
@@ -920,6 +933,7 @@ moveWindowsToNewGroup dir ws l0 s@(Just (W.Stack f up down)) =
             (G _ (Just _), T.Prev) -> insertUpZ (G l0 ws) $ Just $ W.Stack f' up down
             (G _ (Just _), T.Next) -> insertDownZ (G l0 ws) $ Just $ W.Stack f' up down
             _ -> s
+moveWindowsToNewGroup _ _ _ s = s
 
 moveWindowsToNewGroupUp = moveWindowsToNewGroup T.Prev
 moveWindowsToNewGroupDown = moveWindowsToNewGroup T.Next
@@ -943,6 +957,7 @@ moveWindows dir wrap ws@(Just (W.Stack wf wu wd)) l0 (Just s@(W.Stack f up down)
                         | otherwise -> Just $ W.Stack (G l0 ws) (fl++up) []
         (_, dh:dl, T.Next) -> Just $ W.Stack (insertG dh) (fl++up) dl
         _ -> Just s
+moveWindows _ _ _ _ s = s
 
 moveWindowsUp = moveWindows T.Prev
 moveWindowsDown = moveWindows T.Next
@@ -973,6 +988,7 @@ moveToGroupAt i l0 (Just s@(W.Stack (G l (Just f)) up down)) =
         in if length gs > i then onFocusedZ (onZipper $ insertUpZ w) $ focusAtZ i $ Just s { W.focus = G l f' }
            else if length gs == i then insertDownZ (G l0 $ singletonZ w) $ focusAtZ (i-1) $ Just s { W.focus = G l f' }
            else Just s
+moveToGroupAt _ _ s = s
 
 moveWindowsToGroupAt _ Nothing _ s = s
 moveWindowsToGroupAt _ _ _ s@(Just (W.Stack f [] [])) = s
@@ -1016,15 +1032,10 @@ splitGroup l0 z@(Just s) | G l (Just ws) <- W.focus s
 splitGroup _ _ = Nothing
 
 -- sort the windows in the focused group
-sortWindows :: (Window -> String) -> ModifySpec
-sortWindows fun _ (Just s@(W.Stack (G l (Just f)) _ _))
-    = let wins = sortBy (\a b -> compare (fun a) (fun b)) $ W.integrate f
-          fw = W.focus f
-          st = case break (==fw) wins of
-                    (bs, nf:as) -> Just $ W.Stack nf (reverse bs) as
-                    (bs, _) -> W.differentiate bs
-      in Just s { W.focus = G l st }
-sortWindows _ _ gs = gs
+modifyFocusedStack :: (W.Stack Window -> W.Stack Window) -> ModifySpec
+modifyFocusedStack fun _ (Just s@(W.Stack (G l (Just f)) _ _))
+    = Just s { W.focus = G l (Just (fun f)) }
+modifyFocusedStack _ _ gs = gs
 
 collapse :: ModifySpec
 collapse _ (Just (W.Stack (G l (Just (W.Stack f u d))) up down)) = Just $ W.Stack (G l $ Just $ W.Stack f (u ++ (reverse $ flatten up)) (d ++ flatten down)) [] []

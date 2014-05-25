@@ -40,6 +40,7 @@ import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.SetWMName
 import XMonad.Hooks.FloatNext(runLogHook)
+import XMonad.Hooks.OnWindowsInserted
 import qualified XMonad.Hooks.UrgencyHook as U
 import XMonad.Hooks.DynamicHooks
 import XMonad.Layout.Fullscreen
@@ -76,7 +77,6 @@ import XMonad.Util.Scratchpad
 import XMonad.Util.Stack
 import XMonad.Util.Themes
 import XMonad.Util.Timer
-import XMonad.Util.Loggers
 import XMonad.Util.Font
 import XMonad.Util.WorkspaceCompare
 import XMonad.Hooks.InsertPosition
@@ -120,6 +120,9 @@ import System.Process (runInteractiveProcess)
 --     hClose perr
 --     -- no need to waitForProcess, we ignore SIGCHLD
 --     return output
+
+-- debug
+logger s = spawn $ "echo \"`date`: \"" ++ escapeQuery s ++ " >> ~/.xmonad/xmonad.log"
 
 ---------------- Constants-- {{{
 
@@ -263,7 +266,7 @@ myXPConfig ref = def {
     , historyFilter         = deleteConsecutive
     , autoComplete       = Nothing
     , alwaysHighlight = False
-    , searchPredicate = stdSearchPredicate
+    , searchPredicate = infixSearchPredicate
     , promptKeymap = myXPKeymap ref
 }
 
@@ -389,24 +392,20 @@ uniqueWeechat = uniqueTerm [singletonContext] "loader weechat-curses -r '/redraw
 
 ---- Workspace sorting
 -- The temp buffer is the default workspace and will never be recycled (make sure that it should proceed other buffers in the sequence
-tmpWorkspaceTag = "`"
-quickWorkspaceTagEnd = "0"
+tmpWorkspaceTag = [head quickWorkspaceSequence]
 quickWorkspaceTags = map wrapList quickWorkspaceSequence
-quickWorkspaceSequence = takeWhile ((ei >=) . fromSymbol) symbolStream
-    where ei = fromSymbol $ head quickWorkspaceTagEnd
+quickWorkspaceSequence = "`12345789"
 -- The symbolSequence replaces the originalSequence in the locale, thus enabling custom sorting
-originalSequence = "-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
-symbolSequence = "./6-=`123457890:;<>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+symbolSequence   = filter (/= '6') $ fullSequence quickWorkspaceSequence
 -- the workspace tags are implemented as a sliding window across the symbol stream; at any instant the tags are a list counting from a specific symbol
-symbolStream = symbolFrom $ head tmpWorkspaceTag
--- the starting symbol SHOULD be the tmpWorkspaceTag
-validSymbol = ((fromSymbol $ head symbolSequence) <=) . fromSymbol
+symbolStream = symbolSequence ++ filter (not . (`elem` symbolSequence)) (enumFrom (toEnum 0))
 
 --- subgroup symbol sequence: we eliminated '`' due to its ugliness from the subgroup indexing stream; and note that the sub group doesn't necessarily need an index after all
+-- this is for tab keys
 subgroupSymbolSequence = "1234567890-="
 extendedSequence s = filter (not . (`elem` s)) typeables
 fullSequence s = s ++ extendedSequence s
-columngroupSymbolSequence = "1234567890-="
+columngroupSymbolSequence = "123456789"
 indexToSymbol s n = if n >= 0 && n < length s then Just [s !! n] else Nothing
 subgroupIndexToSymbol = indexToSymbol $ fullSequence subgroupSymbolSequence
 -- columngroupIndexToSymbol = indexToSymbol columngroupSymbolSequence
@@ -428,15 +427,6 @@ myWorkspaceSort = getSymbolStringSort
 ---- Prompt autoCompletion matching
 -- useful for window prompts , in which all workspace windows are shown
 complFilteredPredicate p fun cmd compl = fun cmd compl && p compl
-
-stdSearchPredicate cmd cpl = isInfixOf (map toLower cmd) (map toLower cpl) 
-
-prefixSearchPredicate cmd cpl = isPrefixOf (map toLower cmd) (map toLower cpl)
-
--- an implementation for searchPredicate that will make sure all words typed are contained in the result
-repeatedGrep cmd cpl = all (`isInfixOf` lp) (words lc) 
-    where lc = map toLower cmd
-          lp = map toLower cpl
 
 ---- Wallpaper Changer constants
 changeWallpaperBin = "wallpaper-change"
@@ -617,16 +607,37 @@ getFocusStack = do
 -- 3. the current window
 -- note that when the focus is on a float window it would always be case 3
 
+-- a fuzzy kind of comparator that handles case such as f5.pdf vs f10.pdf
+compareFileNames [] [] = EQ
+compareFileNames [] b = LT
+compareFileNames a [] = GT
+compareFileNames a b = 
+    case (span isDigit a, span isDigit b) of
+         ((ab, aa), ([], _)) -> let ((ab', aa'), (bb', ba')) = (break isDigit aa, break isDigit b)
+                                    ta' = ab ++ ab'
+                                in if ta' == bb' then compareFileNames aa' ba'
+                                                 else compare a b
+         (([], _), (bb, ba)) -> compare a b
+         ((ab, aa), (bb, ba)) -> case compare ai bi of
+                                      EQ -> compareFileNames aa ba
+                                      r -> r
+                where ai = read ab :: Int
+                      bi = read bb :: Int
 
 -- sort the windows in the innermost group according to the title
 sortBaseCurrentWindows = do
     wins <- gets (W.allWindows . windowset)
     titles <- mapM (runQuery title) wins
     let pairs = zip wins titles
-        tit w = case find ((==w) . fst) pairs of
-                          Just (_, t) -> t
-                          _ -> ""
-    sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.sortWindows tit
+        sort s@(W.Stack f u d) = st
+            where wins = sortBy (\a b -> compareFileNames (tit a) (tit b)) $ W.integrate s
+                  st = case break (==f) wins of
+                            (bs, nf:as) -> W.Stack nf (reverse bs) as
+                            (bs, _) -> fromJust $ W.differentiate bs 
+                  tit w = case find ((==w) . fst) pairs of
+                                    Just (_, t) -> t
+                                    _ -> ""
+    sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.modifyFocusedStack sort
     
 
 
@@ -725,12 +736,6 @@ switchFocusFloat = switchLayer
 -- }}}
 
 ---------------- LogHook -- {{{
-myLogHook toggleFadeSet dzenLogBar = do
-    -- for java 
-    takeTopFocus
-    statusLogHook dzenLogBar
-    historyHook
-    fadeOutLogHook $ fadeIf (defaultFadeTest toggleFadeSet) defaultFadeInactiveAmount
 
 ---- fade Log hook-- {{{
 ------- the conditions for fading windows in normal circumstances
@@ -739,6 +744,14 @@ isFloating :: Query Bool
 isFloating =  ask >>= \w -> liftX . gets $ M.member w . W.floating . windowset
 -- windows that shall not be faded no matter what
 doNotFadeOutWindows =  className =? "xine" <||> className =? "MPlayer"
+
+myLogHook toggleFadeSet dzenLogBar = do
+    -- for java 
+    takeTopFocus
+    statusLogHook dzenLogBar
+    historyHook
+    fadeOutLogHook $ fadeIf (defaultFadeTest toggleFadeSet) defaultFadeInactiveAmount
+    onWindowsInsertedLogHook
 
 -- windows that shall not be faded given the class name
 -- disableFadingWithinClassName cn = liftM not (className =? cn <&&> (liftX  $ focusedHasProperty (ClassName cn)))
@@ -769,6 +782,7 @@ printLayoutInfo = do
     s <- getMarkedWindowsSize
     InsertOlderToggle t <- XS.get
     XMS mode <- XS.get
+    MMS m <- XS.get
     let (plus, c) = if s == 0 then (" ", myFgColor) else ("+", myNotifyColor)
         [lb,rb] = fmap (dzenColor myFgColor myBgColor) $ ["[","]"]
         autoIndicator = if isAuto then dzenColor myNotifyColor myBgColor "*" else "#"
@@ -778,7 +792,10 @@ printLayoutInfo = do
                              Visual Row -> dzenColor myNotifyColor myBgColor "VR" 
                              Visual Col -> dzenColor myNotifyColor myBgColor "VC" 
                              _ -> "Nm"
-    return $ Just $ lb++autoIndicator++insertOlderIndicator++modeIndicator++"-"++dzenColor c myBgColor plus++rb
+        recordingIndicator = case m of
+                                  Just (name, _) -> dzenColor myNotifyColor myBgColor $ "● " ++ name
+                                  _ -> "■  "
+    return $ Just $ recordingIndicator ++ " | " ++ modeIndicator++ " " ++ lb ++ autoIndicator++insertOlderIndicator++ rb ++ lb ++ "-" ++dzenColor c myBgColor plus ++ rb
 
 -- pretty printing for groupNames
 printGroupNames [] = ""
@@ -820,7 +837,7 @@ taggedGStack wgs = mapM (\w -> siftedTaskGroupOfWindow wgs w >>= \r -> return (w
 infoFromTaggedGStack:: G.MultiStack (Window, Maybe TaskGroup) -> String
 infoFromTaggedGStack ms@(G.Node (W.Stack f u d)) = 
     -- for the first level the wrap pairs are ("1.", "") ("2.", "") and so on
-    let wl = zip (fmap ((++".") . wrapList) columngroupSymbolSequence ++ repeat "") $ repeat ""
+    let wl = zip (fmap ((++".") . wrapList) (fullSequence columngroupSymbolSequence) ++ repeat "") $ repeat ""
         nl = G.level ms
     -- need to get the number of levels inside the struct
     in infoFromTaggedGStack' False ("  ":repeat "") ("","") (wl:(repeat $ repeat ("[","]"))) (myNotifyColor, "/") (take (nl-1) (repeat (myFgColor, myFgColor)) ++ [(myTextHLight, myFgColor)]) myBgColor ms
@@ -875,7 +892,7 @@ statusLogHook h =  do
                                 _                     ->      ""
                           in joinStr "" . fmap (iconify . trim) . reverse . splitOn "by"
         , ppTitle       = wrap ("^fg(#222222)^i("++myBitmapsDir++"/corner_left.xbm)^bg(#222222)^fg(#4c7899)^fn(fkp)x^fn()") ("^fg(#222222)^i("++myBitmapsDir++"/corner_right.xbm)") .  dzenColor myFgColor "#222222" . shorten 120 . pad        
-        , ppOrder   =  \(ws:l:t:hist:gp:hid:xs) -> [ws,l,hist,hid,gp] ++ xs ++ [t]
+        , ppOrder   =  \(ws:l:t:hist:gp:hid:xs) -> [hist,ws,l,hid,gp] ++ xs ++ [t]
         , ppSort        = fmap (.scratchpadFilterOutWorkspace) myWorkspaceSort
         , ppOutput      = hPutStrLn h
         , ppExtras      = [  printLayoutInfo
@@ -979,10 +996,12 @@ insertPositionHook = ask >>= \w -> do
     tog <- liftX $ XS.get >>= \(InsertOlderToggle t) -> return t
     insertPosition Above $ if tog then Older else Newer
 
+
 myManageHook = composeAll [ 
-      insertPositionHook
-    , autoArrangeHook taskGroups
-    , dynamicMasterHook
+      onWindowsInsertedManageHook
+    , insertPositionHook
+    -- , autoArrangeHook taskGroups
+    -- , dynamicMasterHook
     , isFullscreen --> doFullFloat  
     -- gimp related stuff
     , ((propertyToQuery (Role "gimp-toolbox")) <||> (propertyToQuery (Role "gimp-preferences")) <||> (propertyToQuery (Role "gimp-message-dialog")) <||> (propertyToQuery (Role "gimp-dock"))) --> doFloat
@@ -1100,12 +1119,16 @@ setCurrentWorkspaceName n = getCurrentWorkspaceHandle >>= \h -> setWorkspaceName
 getCurrentWorkspaceName = getCurrentWorkspaceHandle >>= getWorkspaceName
 
 -- a set of positions to simulate those used in Vim as i,a,I,A respectively
-data WorkspaceInsertPosition = Before | After | Head | Last
-instance Show WorkspaceInsertPosition where
+data InsertPosition = Before | After | Head | Last deriving Eq
+instance Show InsertPosition where
     show Before = "insert before"
     show After = "insert after"
     show Head = "insert head"
     show Last = "insert last"
+insertPositionKeys = [ ("i"  , Before)
+                     , ("S-i", Head)
+                     , ("a"  , After)
+                     , ("S-a", Last) ]
 
 idleWorkspace allowIdle insp = do
     curr <- currWorkspace
@@ -1146,49 +1169,40 @@ isRecyclableWS = do
           wns <- getWorkspaceNames
           return $ \w -> W.tag w /= tmpWorkspaceTag && not (':' `elem` (wns $ W.tag w)) && validWS w && isNothing (W.stack w) 
 
+-- the symbol stream is defined by (fullsequence quickworkspace)
 symbolFrom :: Char -> String
-symbolFrom ch 
-    | distl >= 0 = take disth (enumFrom ch) ++ dropWhile (/= ch) symbolSequence ++ after
-    | otherwise = enumFrom ch
-    where chi = fromEnum ch
-          orihi = fromEnum $ head originalSequence
-          orili = fromEnum $ last originalSequence
-          disth = orihi - chi
-          distl = orili - chi
-          after = tail . enumFrom $ last originalSequence
+symbolFrom ch = dropWhile (/=ch) symbolStream
 
--- return the index of the symbol in the symbol stream
-fromSymbol ch =
-    case elemIndex ch symbolSequence of
-         Just i -> i + orihi
-         Nothing -> fromEnum ch
-    where orihi = fromEnum $ head originalSequence
-
-
-
-symbolCompare s1 s2 = case (pos1, pos2) of
-                           (Just a, Just b) -> a `compare` b
-                           _                -> s1 `compare` s2
-    where pos1 = s1 `elemIndex` symbolSequence
-          pos2 = s2 `elemIndex` symbolSequence
+compareSymbol a b
+    | a == b = EQ
+    | otherwise = case dropWhile (\s -> s /= a && s /= b) symbolStream of
+                        (h:_) | h == a -> LT
+                              | otherwise -> GT
+                        _ -> EQ
 
 nextSymbol = head . tail . symbolFrom
 
-symbolStringCompare s1 s2 = case (length s1, length s2) of
-                                 (0, 0) -> EQ
-                                 (0, _) -> LT
-                                 (_, 0) -> GT
-                                 (_, _) -> case symbolCompare (head s1) (head s2) of
-                                                EQ -> symbolStringCompare (tail s1) (tail s2)
-                                                r  -> r
+compareLists _ [] [] = EQ
+compareLists _ [] _ = LT
+compareLists _ _ [] = GT
+compareLists f (a:as) (b:bs) = case f a b of
+                                    EQ -> compareLists f as bs
+                                    r -> r
 
-getSymbolStringSort = mkWsSort $ return symbolStringCompare
+-- a version that ranks empty lists last
+compareLists' _ [] [] = EQ
+compareLists' _ [] _ = GT
+compareLists' _ _ [] = LT
+compareLists' f a b = compareLists f a b
+
+compareSymbolString = compareLists compareSymbol
+getSymbolStringSort = mkWsSort $ return compareSymbolString
 
 ---- viewWorkspace: this is relatively easy; just show up a prompt with all workspace names; upon action split the string by : and shift to the workspace by id
 
 quickWorkspace tag = do
     wsts <- allWorkspaceTags
-    if length tag == 1 && validSymbol tc 
+    if length tag == 1
        then case stripPrefix (fmap head wsts) ((takeWhile (/= tc) symbolStream) ++ [tc]) of
                  Just ls -> sequence_ (map (DW.addHiddenWorkspace . \c -> [c]) ls) >> return tag
                  Nothing -> return tag
@@ -1284,10 +1298,12 @@ insertWorkspace name insp iter path fun = do
 
 ---- rename the current workspace
 -- for the time being because we want to allow the user some freedom of actually renaming the workspace after assigning a workspace directory to it, so what we do is that we'll only reassign the directory when necessary
-renameWorkspacePrompt conf = workspacePrompt conf "Rename workspace" (\t n -> setCurrentWorkspaceName n) (\n p -> do
+renameWorkspacePrompt conf immi final = workspacePrompt conf "Rename workspace" (\t n -> setCurrentWorkspaceName n) (\n p -> do
     if not (null p) then saveCurrentWorkspaceDirectory p
                     else return ()
-    setCurrentWorkspaceName n) 
+    setCurrentWorkspaceName n
+    immi
+    final) 
 
 wrapList c = [c]
 
@@ -1379,6 +1395,16 @@ instance ExtensionClass WallpaperChannel where
     initialValue = WPChannel defaultWPChannel
     extensionType = PersistentExtension
 
+compareWithPriorList fun ls a b = 
+    let r = reverse ls
+    in case compare (fun b r) (fun a r) of
+        EQ -> compare a b
+        c -> c
+compareWithPostList fun ls a b =
+    case compare (fun a ls) (fun b ls) of
+        EQ -> compare a b
+        c -> c
+
 -- available commands
 ---- next: go to the next wallpaper
 ---- setch: change the wallpaper channel
@@ -1390,12 +1416,11 @@ wpComplFunc conf str =
     -- the setch command default to use the wallbase
     in if cmd `isCmdPrefixOf` "setch" || cmd `isCmdPrefixOf` "wallbase"
                 -- add in the . to denote the base wallpaper directory, and also to prevent auto complete 
-                then fmap ((\l -> if null l then l else l++["."]) . filter (searchPredicate conf arg) . sortBy (
-                    \a b -> let ls = reverse ["#top", "#new", "#rand", "#favorites"] in
-                            case compare (elemIndex b ls) (elemIndex a ls) of
-                                 EQ -> compare a b
-                                 r -> r
-                ) . map (\s -> fromMaybe s (stripPrefix wallpaperDirectory s)) . lines) $ runProcessWithInput "find" [wallpaperDirectory, "-mindepth", "1", "-type", "d"] ""
+                then fmap ((\l -> if null l then l else l++["."]) 
+                   . filter (searchPredicate conf arg) 
+                   . sortBy (compareWithPriorList elemIndex ["#top", "#new", "#rand", "#favorites"]) 
+                   . map (\s -> fromMaybe s (stripPrefix wallpaperDirectory s)) . lines) 
+                   $ runProcessWithInput "find" [wallpaperDirectory, "-mindepth", "1", "-type", "d"] ""
                 else if cmd `isCmdPrefixOf` "flickr"
                     then return []
                     else return $ filter (isPrefixOf cmd) ["next", "setch", "flickr", "wallbase", "rate", "ban", "trash"]
@@ -1471,6 +1496,7 @@ getWPChannel = do
 
 getWPDirectory = getWPChannel >>= \c -> return $ wallpaperDirectory ++ c
 
+--}}}
 
 ---------------- Start workspace transition timer -- {{{
 -- due to some weird reasons the dzen bar refuses to be detected by the avoidStruts at startup. Resolution: switch to the right workspace after some delay (assuming that dzen has started up by that time
@@ -1572,7 +1598,7 @@ data PromptWidget = PromptWidget { promptPrefix :: String
                                  , promptCommandToComplete :: String -> String
                                  , promptNextCompletion :: String -> [String] -> String
                                  , promptComplFunction :: XPConfig -> ComplFunction
-                                 , promptAction :: String -> X ()
+                                 , promptAction :: X () -> X () -> OnWindowsInserted -> String -> X ()
                                  , promptHighlightPredicate :: String -> String -> Bool
                                  }
 -- (prefix, commandToComplete, nextCompletion, complFunc, modeAction)
@@ -1588,16 +1614,36 @@ widgetCmd w c = let p = promptPrefix w++" " in joinStr p $ tail $ splitOn p c
 findWidget pre = find ((==pre) . promptPrefix) dynamicPromptWidgets
 findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) $ fmap (\w -> (stripPrefix (promptPrefix w ++ " ") c, w)) dynamicPromptWidgets
 
+dwgtMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) (\immi final _ s -> (modeAction mode) s "" >> immi >> final)
+dwgtDictMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) (\immi final owi s -> do
+    applyOnWindowsInserted owi {
+              numberOfWindows = 1
+            , logFinished = \a b -> do
+                (logFinished owi) a b
+                final
+        }
+    (modeAction mode) s "" 
+    immi)
 dynamicPromptWidgets = [
         -- this follow the (prefix, prompt) format
-        dwgt VBPrompt "vb" (\c -> vbComplFunc) vbAction
-      , dwgt defaultSDMode "sdcv-Collins" (\c -> completionFunction defaultSDMode) (flip (modeAction defaultSDMode) "")
-      , dwgt mobySDMode "sdcv-Moby" (\c -> completionFunction mobySDMode) (flip (modeAction mobySDMode) "")
-      , dwgt modernCHSDMode "sdcv-modernChinese" (\c -> completionFunction modernCHSDMode) (flip (modeAction modernCHSDMode) "")
-      , dwgt bigCHSDMode "sdcv-bigChinese" (\c -> completionFunction bigCHSDMode) (flip (modeAction bigCHSDMode) "")
-      , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction
-      , dwgt FMCPrompt "fmc" (\c -> fmcComplFunc) fmcAction
-      , dwgt CalcMode "calc" (\c -> completionFunction CalcMode) (flip (modeAction CalcMode) "")
+        dwgt VBPrompt "vb" (\c -> vbComplFunc) (\immi final owi s -> do
+            -- wait until the vb is completely spawned
+            applyOnWindowsInserted owi {
+                      numberOfWindows = 1
+                    , logFinished = \a b -> do
+                        (logFinished owi) a b
+                        final
+                }
+            vbAction s
+            immi
+        )
+      , dwgtDictMode defaultSDMode "sdcv-Collins"
+      , dwgtDictMode mobySDMode "sdcv-Moby"
+      , dwgtDictMode modernCHSDMode "sdcv-modernChinese"
+      , dwgtDictMode bigCHSDMode "sdcv-bigChinese"
+      , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction'
+      , dwgt FMCPrompt "fmc" (\c -> fmcComplFunc) fmcAction'
+      , dwgtMode CalcMode "calc"
     ]
 
 evalStr s = let evalcomps = splitOn "`" s
@@ -1612,7 +1658,9 @@ dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
                    ([], ('\'':_):_) -> exactMatch $ fmap stripShortcutOutput l
                    (_, "which":bef) | all ((`elem` "~/") . head) l && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
                                     | otherwise -> exactMatch l
-                   (aft, "diff":bef) | not (null fdo) -> joinStr " " $ reverse bef ++ [escape (head fdo)]
+                   (aft, "diff":bef) | not (null fdo) -> joinStr " " $ (case bef of
+                                                                            "git":bef' -> reverse bef'
+                                                                            _ -> reverse bef) ++ [escape (head fdo)]
                    (_, w:bef) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                            in joinStr " " $ reverse bef ++ [w, promptNextCompletion wp (widgetCmd wp c) l]
                    -- we have to specify manually so the 'm' case above when there is some sort of the string on its right would sift through here
@@ -1712,15 +1760,14 @@ dpromptComplFunc c cmds home hist s = do
                         let ha = head cas
                             cas = reverse afs
                         -- test if af is one of the commands
-                        in if ha `elem` cmds then shtout $ fmap lines $ runProcessWithInput "which" cas ""
-                                             else shtout $ return $ take whichLimit $ filter (sp $ joinStr " " cas) cmds
+                        in trycmp [shtout $ fmap lines $ runProcessWithInput "which" cas "", shtout $ return $ take whichLimit $ filter (sp $ joinStr " " cas) cmds]
                     -- we need to make sure that we are using the current directory as a starting point
                     (afs, "diff":_) | ntailsp <= 1 -> trycmp [output (myScriptsDir++"/xdiff") (show outputWidth:show outputHeight:diffargs), shellcmp' ["file"] []]
                             where diffargs = if afs == [""] then [] else reverse afs
                     (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
                                                           in (promptComplFunction wp) c (widgetCmd wp s)
                 -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
-                    _ | not (null evalstr) -> shtout $ fmap (take evalLimit . lines) $ runProcessWithInput "bash" ["-c", evalstr] ""
+                    _ | not (null evalstr) -> shtout $ fmap (take evalLimit . lines) $ runProcessWithInput "/bin/sh" ["-c", "loader " ++ escapeQuery evalstr] ""
                       | otherwise -> case unescapedArgs of
                             "man":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xman") $ show outputWidth:show outputHeight:pa:pai:pas
                             "du":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xdu") $ show outputHeight:pa:pai:pas
@@ -1729,19 +1776,22 @@ dpromptComplFunc c cmds home hist s = do
                             ["top", ""] | ntailsp == 1-> output (myScriptsDir++"/xtop") [show topLimit]
                             ["free", ""] | ntailsp == 1 -> output "free" []
                             ["ifconfig", ""] | ntailsp == 1 -> output "ifconfig" []
-                            ["git", ""] | ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
+                            ["git", gcmd] | gcmd `elem` ["", "status"] && ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
                             -- only gives the prime command completion on three spaces
                             ["git", pa] -> gitcmdcmp pa
                             -- in all other instances we should give the log information
                             "git":pa:_ -> trycmp [output "git" $ ["log", "--grep", last unescapedArgs], scopecmp, shellcmp]
                             _ -> trycmp [scopecmp, shellcmp]
 
-dpromptAction c cmds home hist s = 
+
+cmdsWithGUI = ["xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition"]
+dpromptAction c cmds home history hist immi final owi s = 
         -- perform some special actions on some commands
         let args = parseShellArgs s
+            follow = immi >> final
         in case (findWidgetForAction s, args) of
-                (Just (rest, w), _) -> (promptAction w) rest
-                (_, [('m':pre:[]), pa]) -> spawn $ myScriptsDir++"/xshortcut mark "++[pre]++" "++pa
+                (Just (rest, w), _) -> (promptAction w) immi final owi rest
+                (_, [('m':pre:[]), pa]) -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
                 (_, "reboot":_) -> removeAllWorkspaces >> spawn "reboot"
                 (_, "systemctl":"poweroff":_) -> removeAllWorkspaces >> spawn "systemctl poweroff"
                 (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do
@@ -1751,17 +1801,37 @@ dpromptAction c cmds home hist s =
                                                  "-" -> getCurrentWorkspaceOldDirectory
                                                  p -> return $ unescape p
                                  saveCurrentWorkspaceDirectory d
-                                 dynamicPrompt' c cmds home hist
-                            | otherwise -> spawn $ "loader " ++ dphandler++" "++if null s then "." else s
+                                 dynamicPrompt' c cmds home history hist immi final owi
+                            | otherwise -> do
+                                -- we need to determine the sort of thing to do with the dphandler
+                                fe <- io (doesFileExist ha)
+                                de <- io (doesDirectoryExist ha)
+                                let ha' = if null s then "." else s
+                                    run = spawn $ "loader " ++ dphandler++" "++ha'
+                                if fe || de || '/' `elem` ha' || ('.' `elem` ha' && pas == []) || ha `elem` cmdsWithGUI
+                                   then do
+                                        applyOnWindowsInserted owi {
+                                                  numberOfWindows = 1
+                                                , logFinished = \a b -> do
+                                                    (logFinished owi) a b
+                                                    final
+                                            }
+                                        run 
+                                        immi
+                                   else run >> follow
+                                
 
 divide' _ [] (r, w) = (reverse r, reverse w)
 divide' p (x:xs) (r, w) = divide' p xs $ if p x then (x:r, w) else (r, x:w)
 divide p l = divide' p l ([],[])
 
-dynamicPrompt c = do
+dynamicPrompt c immi final owi = do
     cmds <- io getCommands
     home <- io $ env "HOME" "/home/lingnan"
-    hist <- fmap (fmap unescape . nub . sort . filter (\s -> isPrefixOf "/" s || isPrefixOf "~/" s)) $ io $ historyCompletion ""
+    history <- io readHistory
+    let histp = (=~ "^~?/")
+        histf a z = (filter histp a) ++ z
+        hist = fmap unescape $ nub $ sort $ M.foldr histf [] history
     --     relative' = filter (\s -> isPrefixOf "./" s || isPrefixOf "../" s) hist
     -- relative <- filterM (\f -> do
     --         fe <- io $ doesFileExist f 
@@ -1775,13 +1845,14 @@ dynamicPrompt c = do
     --     fasdd = fst $ unzip fasdd'
     --     fasdf = fst $ unzip fasdf'
     -- dynamicPrompt' c cmds home (absolute++relative)
-    dynamicPrompt' c cmds home hist
+    dynamicPrompt' c cmds home history hist immi final owi
 
-dynamicPrompt' c cmds home hist = do
+dynamicPrompt' c cmds home history hist immi final owi = do
     d <- getCurrentWorkspaceDirectory
     io $ setCurrentDirectory d
     -- only deal with directories or files at the moment; not doing check on the file / directories to save performance
-    mkXPrompt (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist) (dpromptAction c cmds home hist)
+    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist) (dpromptAction c cmds home history hist immi final owi) history
+    return ()
 -- }}}
 
 ----- Calculator prompt -- {{{
@@ -1818,7 +1889,7 @@ instance XPrompt StarDictMode where
     commandToComplete _ = id
     completionFunction (SDMode _ d) = \s -> if (length s == 0) then return [] else do
         fmap lines $ runProcessWithInput sdcvBin [d, s, sdLength] ""
-    modeAction _ query _ = vbAction $ if length (words query) <= 1 then "wt " else "d !tr "
+    modeAction _ query _ = vbAction $ (if length (words query) <= 1 then "wt " else "d !tr ") ++ query
     nextCompletion _ c _ =  c
     highlightPredicate _ _ _ = False
 mkSDMode p d = XPT $ SDMode p d
@@ -1940,7 +2011,7 @@ mkSearchPrompt config prompt predicate a = do
     let wswins = W.integrate' . W.stack
         -- remove duplicate windows
         cwins = nub $ l++gf++r++float++ml
-        winfo :: Window -> X ((String, String), Window)
+        winfo :: Window -> X (([String], String), Window)
         winfo w = do
             t <- runQuery title w
             tags'' <- getTags w
@@ -1949,7 +2020,7 @@ mkSearchPrompt config prompt predicate a = do
                          [] | w `elem` ml -> ["*"]
                             | otherwise -> []
                          ts -> ts
-            return (((if null tags then id else wrap "[" "]") $ concatMap ("'"++) tags, t), w)
+            return ((tags, t), w)
         -- we must make sure there aren't duplicated entries
         wp ws = fmap (concatMap (fmap (\(s, ((a,t,b), w)) -> ((a,t,if s == "" then b else b++" ["++s++"]"), w)) . zip ([""] ++ fmap show [1..])) . groupBy (\(a,_) (b,_) -> a == b) . fmap (attag (W.tag ws))) $ mapM winfo $ wswins ws
         wr = fmap concat . mapM wp
@@ -1965,18 +2036,13 @@ mkSearchPrompt config prompt predicate a = do
                         fsp s = (take (l - length s) $ repeat ' ')++s
                     in fmap fsp ls
         (is, wins) = unzip $ flip sortBy (zip winfos winls) $ \((a,b,c),_) ((d,e,f),_) -> 
-            let regl = ["['\"","[", ""]
-                tagl = ["`", ""]
-                fun l s = findIndex (`isPrefixOf` s) l
-                cm l a b = case compare (fun l a) (fun l b) of
-                             EQ -> compare a b
-                             r -> r
-            in case (cm regl a d, cm tagl b e, compare c f) of
+            case (compareLists' compareRegs a d, compareSymbolString b e, compare c f) of
                  (EQ, EQ, z) -> z
                  (EQ, y, _) -> y
                  (x, _, _) -> x
         (regs', tags', tits) = unzip3 is
-        finfos = fmap (\(a,b,c)->a++" ["++b++"]: "++c) $ zip3 (fillsp regs') (fillsp tags') tits
+        regsToStr regs = (if null regs then id else wrap "[" "]") $ concatMap ("'"++) regs
+        finfos = fmap (\(a,b,c)-> a++" ["++b++"]: "++c) $ zip3 (fillsp (fmap regsToStr regs')) (fillsp tags') tits
     -- filter the windows according to p
     mkXPrompt (WindowSearchPrompt prompt) config (\s -> return $ filter (searchPredicate config s) finfos) $ \r ->
         whenJust (fmap (wins !!) $ elemIndex r finfos) $ a
@@ -2129,14 +2195,11 @@ instance Eq TaskGroup where
 instance Show TaskGroup where
     show = taskGroupName
 
-compFilterKeyList [] [] = EQ
-compFilterKeyList [] _ = LT
-compFilterKeyList _ [] = GT
-compFilterKeyList (h1:l1) (h2:l2) = let c = compCh h1 h2 in if c == EQ then compFilterKeyList l1 l2 else c
+compFilterKeyList = compareLists compCh
     where compCh c1 c2 = let lc1 = toLower c1
                              lc2 = toLower c2
                          in if lc1 == lc2 then compare c2 c1
-                                       else compare lc1 lc2
+                                          else compare lc1 lc2
 
 filterKeyList = fmap (\s-> (if "S-" `isPrefixOf` s then toUpper else toLower) $ last s) . filter (not . null) . splitOn " "
 
@@ -2184,12 +2247,25 @@ instance Default TaskGroup where
                       }
 
 intellijTaskGroup = def { taskGroupName = "idea"
-                        , filterKey = "i"
+                        , filterKey = "j"
                         , filterPredicate = className =? "jetbrains-idea"
                         , localFirst = False
                         , construct = \n _ -> runShell "intellij-idea-ultimate-edition"
                         }
-
+-- allowed filter keys for taskgroups
+-- 1. must be typeable
+-- 2. must not be number
+-- 3. must not be 
+--      c -- current group 
+--      g -- used by gg
+--      S-g -- used by gG
+--      p -- used by gp  
+--      S-p -- used by gP 
+--      i -- used by gi 
+--      S-i -- used by cgI 
+--      a -- used by cga 
+--      S-a -- used by cgA 
+--      / -- used by a{h,j,k,l}/
 taskGroups = [ 
       -- vimb instances
       def { taskGroupName = "vimb"
@@ -2429,7 +2505,6 @@ currentTaskGroup = contextualGroup taskGroups
 allTaskGroupsWithFilterKey mdKeys = 
     (filter (not . null . filterKey) siftedTaskGroups)++if null mdKeys then [] else [currentTaskGroup {filterKey = k} | k <- mdKeys]
 
-
 -- a simplified version of appFilterKeys with correct predicates for filtering in the current workspace; if the app's definition is not useful for local context then switch to global
 localFirstFilterPredicate g = let f = filterPredicate g in if localFirst g then isInCurrentWorkspace <&&> f else f
 
@@ -2442,18 +2517,16 @@ runManageHookOnFocused = withFocused . runManageHook
 mountDupKeys dupKeys ls = 
     ls ++ fmap (\(k, ok) -> (k, maybe (return ()) snd $ find ((== ok) . fst) ls)) dupKeys
 
-appendMap :: (a->a) -> [a] -> [a]
-appendMap fun ls = ls ++ fmap fun ls
-
-appendActionWithException a ex ls = ex ++ fmap (\(k, ka) -> (k, ka >> a ka)) ls
-
 -- the normal typableChars
-typeables = alphas ++ typeablesWithoutAlphas
-alphas = ['a'..'z']++['A'..'Z']
-nums = ['0'..'9']
-syms = "!@#$%^&*()-_=+\\|`~[{]};:'\",<.>?"
-typeablesWithoutAlphas = nums ++ syms
-typeableKeyStrokes = fmap charToKeyStroke typeables
+typeables = nums ++ easierSyms ++ lowerAlphas ++ mediumSyms ++ upperAlphas ++ restSyms
+alphas = lowerAlphas ++ upperAlphas
+lowerAlphas = ['a'..'z']
+upperAlphas = fmap toUpper lowerAlphas
+nums = ['1'..'9'] ++ "0"
+easierSyms = "-="
+mediumSyms = "[];',./"
+restSyms = "\\!@#$%^&*()_+{}:\"<>?|" --`~"
+syms = easierSyms ++ restSyms
 
 charToKeyStroke c = if isUpper c then "S-"++[toLower c]
                                  else case c of
@@ -2508,12 +2581,13 @@ hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 
 -- implementing the motion keys list
 -- we don't allow 0 because that is kept for use as d0
-numberKeys = zip (fmap show [1..9]) [1..9]
+numberKeys = flip zip [1..] $ [""] ++ fmap ((++" ") . joinStr " " . fmap charToKeyStroke . show) [2..9]
+numberKeyToMotion a = if null a then a else "g "++a
+numberMotionKeys = fmap (\(a,b) -> (numberKeyToMotion a, b)) numberKeys
 tabKeys = zip (fmap wrapList subgroupSymbolSequence) [0..]
 extendedTabKeys = zip (fmap charToKeyStroke $ extendedSequence subgroupSymbolSequence) [length tabKeys..]
 columnKeys = zip (fmap wrapList columngroupSymbolSequence) [0..]
 extendedColumnKeys = zip (fmap charToKeyStroke $ extendedSequence columngroupSymbolSequence) [length columnKeys..]
-groupKeys = zip (fmap show [1..9]) [0..]
 feedReg k fun = fmap Just $ fun k
 wrapInclude = fmap (\a -> (a, True))
 getCurrentMinimizedWindowsWithoutRegs = getCurrentMinimizedWindows >>= filterM (fmap null . getTags)
@@ -2525,7 +2599,7 @@ regKeys = [( charToKeyStroke k
            -- this determines if the windows are added into the register
            , isUpper k
            , targetForReg
-           , \t -> orderedWindowsMatchingPredicate (hasTagQuery t)) | k <- filter (not . (`elem` "*/'?")) typeables ]
+           , \t -> orderedWindowsMatchingPredicate (hasTagQuery t)) | k <- alphas ++ nums ]
 quoteRefed = fmap (\(a,b,c,d,e)->("' "++a++" ",b,c,d,e))
 regReadonlyKeys = [ (charToKeyStroke '\''
                     , feedReg "'"
@@ -2553,12 +2627,13 @@ regPromptKeys' promptForCut promptForAdd =
       , targetForReg
       , \t -> orderedWindowsMatchingPredicate (hasTagQuery t))
     | (c, add, pr) <- [('/', False, promptForCut), ('?', True, promptForAdd)] ]
-sortRegs = sortBy (\a b -> 
-            let l = fmap wrapList "'\"123456789*" in
-            -- we want a,b,c,d,9,3,2,1,...,""
-            case compare (elemIndex a l) (elemIndex b l) of
-                 EQ -> compare a b
-                 r -> r)
+
+-- make sure that the star register is sorted last
+compareRegs a b =
+    case compare (elemIndex a ["*", ""]) (elemIndex b ["*", ""]) of
+        EQ -> compareWithPriorList elemIndex (fmap wrapList "'\"123456789") a b
+        r -> r
+sortRegs = sortBy compareRegs
 
 data Motion = Motion {
         -- the window that should be focused by navigation
@@ -2589,7 +2664,7 @@ motionKeys =
     [ (sfk++t, fk++t, do
              st <- getBaseCurrentStack
              case st of
-                  Just (W.Stack _ u _) | n < len -> 
+                  Just (W.Stack _ u _) | n < len && (leap || ind /= length u || useSingleCurrent) -> 
                         return def { target = t
                                    , simpleX = Just $ sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusAt ind
                                    , toggleList = if leap then Just [w] else Nothing
@@ -2605,23 +2680,27 @@ motionKeys =
                   _ -> return def
       )
     | (sfk, fk, leap, quick) <- [("M1-", "M1-", True, False), ("f ", "M-f ", False, False), ("", "M-g ", False, True)]
-    , (t, n) <- if quick then [("0", 0), ("S-4", -1)] 
-                         else tabKeys ++ if leap then [] else extendedTabKeys
+    , (t, n, useSingleCurrent) <- if quick then [("0", 0, False), ("S-4", -1, True)] 
+                                           else fmap (\(a,b)->(a,b,False)) $ tabKeys ++ if leap then [] else extendedTabKeys
     ]
     -- C- toggles
     ++
     [ (sfk++c, fk++c, do
              gs <- G.getCurrentGStack
              case gs of
-                  Just (G.Node s@(W.Stack _ u _)) | n < len -> 
+                  Just (G.Node s@(W.Stack _ u _)) | n < len && (leap || ind /= length u || useSingleCurrent) -> 
                         return def { target = t
                                    , simpleX = Just $ sendMessage $ G.Modify $ G.focusGroupAt ind
                                    , toggleList = if leap then Just $ G.flattened g else Nothing
-                                   , implicitToggleList = if leap then Nothing else Just $ concatMap G.flattened $ drop si $ take (ei+1) ls
+                                   , implicitToggleList = if leap then Nothing else Just $ concatMap G.flattened $ 
+                                                                    case () of
+                                                                        _ | ci < ind -> drop ci $ take (ind+1) ls
+                                                                          | ci == ind -> [g]
+                                                                          | otherwise -> drop ind $ take ci ls
                                    , historyToggle = if leap 
-                                                        then Just $ toggleGroup
-                                                        else Nothing
-                                   }
+                                                    then Just $ toggleGroup
+                                                    else Nothing
+                               }
                             where ls = W.integrate s
                                   len = length ls
                                   ind = n `mod` len
@@ -2632,9 +2711,9 @@ motionKeys =
                                   t = fmap (\a -> (a, True)) w
                   _ -> return def
       )
-    | (sfk, fk, leap, quick) <- [("C-", "C-", True, False), ("f C-", "M-f C-", False, False), ("g ", "M-g ", False, True)]
-    , (c, n) <- if quick then [("C-0", 0), ("C-4", -1)] 
-                         else columnKeys ++ if leap then [] else extendedColumnKeys
+    | (sfk, fk, leap, quick) <- [("C-", "C-", True, False), ("f C-", "M-f C-", False, False), ("", "M-g ", False, True)]
+    , (c, n, useSingleCurrent) <- if quick then [("C-0", 0, False), ("C-S-4", -1, True)] 
+                                           else fmap (\(a,b)->(a,b,False)) $ columnKeys ++ if leap then [] else extendedColumnKeys
     ]
     ++
     -- perform the saved find function forward and backwards
@@ -2647,16 +2726,17 @@ motionKeys =
     ]
     ++
     -- word and back
-    [ (sfk++wk, fk++wk,
+    [ (nk++wk, "M-"++numberKeyToMotion nk++wk,
           let move' dir = do
                mfs <- getFocusStack
                let sign' = if dir == Next then sign else sign * (-1)
                return $ case mfs of
-                       Just (W.Stack f u d) | isJust mind -> Just (Just (ls !! ind, include), ind)
+                       Just (W.Stack f u d) | isJust mind && (ind /= length u || not include) -> Just (Just (ls !! ind, oind < 0 || oind >= length ls || include), ind)
                             where ci = length u
                                   ls = W.integrate' mfs 
                                   -- turning off the wrapping function
-                                  mind = clamp (ci + sign' * n) 0 (length ls - 1)
+                                  oind = ci + sign' * n
+                                  mind = clamp oind 0 (length ls - 1)
                                   ind = fromJust mind
                        _ -> Nothing
               move = fmap (maybeToMaybe fst) . move'
@@ -2669,7 +2749,6 @@ motionKeys =
       )
     | (nk, n) <- numberKeys
     , (wk, sign, include) <- [("b", -1, True), ("w", 1, False)]
-    , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
     -- gg and G
     ++
@@ -2694,20 +2773,20 @@ motionKeys =
       )
     | (sfk, fk, n) <- [("g g", "M-g g", 0)] 
                       ++ 
-                      [ (nk++" S-g", "M-g "++nk++" S-g", n')
-                      | (nk, n') <- groupKeys] 
+                      [ (nk++"S-g", "M-"++numberKeyToMotion nk++"S-g", n'-1)
+                      | (nk, n') <- tail numberKeys] 
                       ++
                       [ ("S-g", "M-g S-g", -1)]
     ]
     -- the h j k l's
     ++
-    [ (sfk++wk, fk++wk,
+    [ (nk++wk, "M-"++numberKeyToMotion nk++wk,
           let move' dir' = do
                   let sign = if dir == dir' then 1 else -1
                   ins <- focusIsInGStack
                   bs <- fmap gfun G.getCurrentGStack
                   return $ case (ins, bs) of
-                      (True, Just (G.Node s@(W.Stack _ up _))) | isJust mind -> 
+                      (True, Just (G.Node s@(W.Stack _ up _))) | isJust mind && ind /= ci -> 
                                 (Just ((fmap (\a -> (a, True)) $ G.focal $ ls !! ind), ind), concatMap G.flattened $ drop si $ take (ei+1) ls)
                          where ls = W.integrate s 
                                len = length ls
@@ -2718,11 +2797,12 @@ motionKeys =
                                (si, ei) = if ci < ind then (ci, ind) else (ind, ci)
                       _ -> (Nothing, [])
               move = fmap (maybeToMaybe fst . fst) . move'
-          in move' Next >>= \mt -> return $ case mt of
+          in move' Next >>= \mt -> do
+              return $ case mt of
                     (Just (t, ind), ls) -> 
                                 def { target = t
                                     -- , searchFunction = Just move
-                                    , simpleX = Just (sx ind)
+                                    , simpleX = Just $ sx ind
                                     -- select everything in the consecutive row/col
                                     , implicitToggleList = Just ls
                                     }
@@ -2734,7 +2814,6 @@ motionKeys =
                              ++
                              [(wk', dir', id, \n -> sendMessage $ G.Modify $ G.focusGroupAt n)
                              | (wk', dir') <- [("h", Prev), ("l", Next)]]
-    , (sfk, fk) <- [(nk++" ", "M-g "++nk++" ")] ++ if n == 1 then [("", "M-")] else []
     ]
     ++
     -- group toggling
@@ -2768,10 +2847,10 @@ motionKeys =
                     , searchFunction = find
                 }
       )
-    | (tk, ta, _, xt, xls) <- regKeys ++ regPromptKeys "Select windows from register:" ++ regReadonlyKeys
+    | (tk, ta, _, xt, xls) <- regKeys ++ regPromptKeys "Select windows from register: " ++ regReadonlyKeys
     ]
 
-motionKeyCommands' = flip fmap (nubBy (\(_,a,_) (_,b,_)->a==b) motionKeys) $ \(_, k, x) -> (k, do
+motionKeyCommands' = flip fmap (nubBy (\(_,a,_) (_,b,_) -> a == b) motionKeys) $ \(_, k, x) -> (k, do
     mf <- gets (W.peek . windowset)
     Motion mt simpx mtogls _ mtoggle mconstruct mfind <- x
     -- first save the function for future reference
@@ -2793,9 +2872,8 @@ motionKeyCommands = concatMap processKey motionKeyCommands'
 
 -- return the normal selection for most of the commands
 windowSelectionForMotionKey key = maybe (return []) snd $ find ((==key) . fst) motionKeyWindowSelection
-motionKeyWindowSelection = flip fmap (nubBy (\(a,_,_) (b,_,_) -> a == b) motionKeys) $ \(k, _, x) -> (k, do
+windowSelectionFromMotion mt = do
     mf <- gets (W.peek . windowset)
-    mt <- x
     case (toggleList mt, implicitToggleList mt) of
          (_, Just ls) -> return ls
          (Just ls, _) -> return ls
@@ -2806,7 +2884,8 @@ motionKeyWindowSelection = flip fmap (nubBy (\(a,_,_) (b,_,_) -> a == b) motionK
                                                  (Just fi, Just ti) | fi < ti -> drop fi $ take (ti + if include then 1 else 0) wins
                                                                     | fi == ti -> [f]
                                                                     | otherwise -> drop ti $ take fi wins
-                        _ -> [])
+                        _ -> []                                                                      
+motionKeyWindowSelection = flip fmap (nubBy (\(a,_,_) (b,_,_) -> a == b) motionKeys) $ \(k, _, x) -> (k, x >>= windowSelectionFromMotion)
 
 -- the first argument is the group key
 struct gfun n = do
@@ -2818,25 +2897,23 @@ struct gfun n = do
 groupList = struct (maybeToMaybe G.bases . maybeToMaybe G.current)
 columnList = struct id
 structKeys gk = 
-    [ (fks, xls)
+    [ (nk++fk, xls)
     | (nk, n) <- numberKeys
     , (fk, xls) <- [ (gk, groupList n)
-                   , ("c", columnList n)]
-    , fks <- [nk++" "++fk] ++ if n == 1 then [fk] else []
+                   , ("r", columnList n)]
     ]
 wssKeys =
-    [ (fks, do
+    [ (nk++"s", do
             wss <- allWorkspaces
             curr <- gets (W.currentTag . windowset)
             let ls = concatMap (W.integrate' . W.stack) $ take n $ snd $ break ((==curr).W.tag) wss
             return ls)
     | (nk, n) <- numberKeys
-    , fks <- [nk++" s"] ++ if n == 1 then ["s"] else [] 
     ]
 
 cutCommands = concatMap (processKey . addPrefix) $
     [ (regk++dc, da)
-    | (regk, ta, add, _, _) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys' "Cut windows to register:" "Add windows to register:")
+    | (regk, ta, add, _, _) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys' "Cut windows to register: " "Add windows to register: ")
     , (dc, da) <- -- deletion
                   [ (fk, do
                         ls <- xls
@@ -2867,9 +2944,8 @@ cutCommands = concatMap (processKey . addPrefix) $
                                   Just (W.Stack f _ d) -> [f]++d
                                   _ -> []
                       removeWorkspaces $ fmap W.tag $ take n ls)
-                  | (fks, n) <- [ (pk++" "++wfk, n')
+                  | (fks, n) <- [ (pk++" "++nk++"s", n')
                                 | (nk, n') <- numberKeys
-                                , wfk <- [nk++" s"] ++ if n' == 1 then ["s"] else []
                                 , pk <- ["d"{- , "m" -}] ]
                                 -- ++
                                 -- [ ("C-S-q", 1) ]
@@ -2880,41 +2956,36 @@ cutCommands = concatMap (processKey . addPrefix) $
     | t <- quickWorkspaceTags]
     -- the find motion for workspaces
     ++
-    [ ("d f M-"++charToKeyStroke t, do
+    [ ("d "++mk++"M-"++ch, do
         ts <- allWorkspaceTags
         curr <- gets (W.currentTag . windowset)
         -- first we should try to locate the indices
-        case (elemIndex curr ts, elemIndex [t] ts) of
-             (Just ci, Just ti) -> removeWorkspaces $ drop si $ take (ei+1) ts
-                where (si, ei) = if ci < ti then (ci, ti) else (ti, ci)
+        case (elemIndex curr ts, ati ts) of
+             (Just ci, Just ti) | ci < ti -> removeWorkspaces $ drop ci $ take (ti+1) ts
+                                | ci == ti -> if useSingleCurrent then removeWorkspaces $ [ts !! ci] else return ()
+                                | otherwise -> removeWorkspaces $ drop ti $ take ci ts
              _ -> return ())
-    | t <- fullSequence quickWorkspaceSequence ]
-    -- the g start and end motion for workspaces
-    ++
-    [ ("d g M-"++fk, do
-            ts <- allWorkspaceTags
-            curr <- gets (W.currentTag . windowset)
-            case (elemIndex curr ts, n `mod` (length ts)) of
-                 (Just ci, ti) -> removeWorkspaces $ drop si $ take (ei+1) ts
-                    where (si, ei) = if ci < ti then (ci, ti) else (ti, ci)
-                 _ -> return ())
-    | (fk, n) <- [("0", 0), ("4", -1)]]
+    | (mk, ch, ati, useSingleCurrent) <- 
+                       [ ("f ", charToKeyStroke t, elemIndex [t], False) | t <- symbolSequence]
+                       ++
+                       [ ("", "0", \_ -> Just 0, False), ("", "S-4", \ts -> Just $ length ts - 1, True) ]
+    ]
     -- the [ and ] motion
     ++
-    [ ("d "++mk++dk, do
+    [ ("d "++nk++dk, do
             wst <- workspaceStack
             let ls = case wst of
-                         Just (W.Stack f u d) -> if dir == Prev then [f]++u else [f]++d
+                         Just (W.Stack f u d) | dir == Prev -> if null u then [] else [f]++u
+                                              | otherwise -> if null d then [] else [f]++d
                          _ -> []
             removeWorkspaces $ fmap W.tag $ take (n+1) ls)
     | (nk, n) <- numberKeys
-    , mk <- [nk++" "] ++ if n == 1 then [""] else []
     , (dk, dir) <- [("[", Prev), ("]", Next)]
     ]
 
 yankCommands = concatMap (processKey . addPrefix) $
     [ (kstr, da)
-    | (regk, ta, add, _, _) <- regKeys ++ regPromptKeys' "Yank windows to register:" "Add windows to register:"
+    | (regk, ta, add, _, _) <- regKeys ++ regPromptKeys' "Yank windows to register:" "Add windows to register: "
     , (kstr, da) <- [ ("' "++regk++" y "++mk, do
                             ls <- xls
                             ta $ \t -> yank add t ls
@@ -2946,6 +3017,109 @@ yankCommands = concatMap (processKey . addPrefix) $
            mapM_ unTag (W.integrate' gs))
     ]
 
+constructionKeys = [ (filterKey g, \n ls lf -> do
+                            onWindowsInserted n (\_ _ -> return ()) ls (\_ _ -> lf)
+                            (construct g) n Nothing)
+                   | g <- allTaskGroupsWithFilterKey ["c"]]
+                   ++
+                   [ ("/", \n l lf -> do
+                           let base x = mkDynamicPrompt' (return ()) (return ()) $ OnWindowsInserted 1 (\_ _ -> return ()) (\_ _ -> return ()) (\mf ls -> do
+                               if not (null ls) then l mf $ head ls
+                                                else return ()
+                               x)
+                           (!! n ) $ (iterate base lf)
+                     ) ]
+
+-- the change commands allow an extra X () that will be run AFTER the windows has been created
+changeCommands = concatMap (processKey . addPrefix) $
+    [ (regk++mk++"c "++mt++ck, \immi final -> do
+        -- first get the selection to be replaced
+        (tgx, ls) <- xlst
+        -- then travel to the place
+        case tgx of
+             Just tx -> tx
+             _ -> return ()
+        -- get the register
+        mt <- ta $ return . id
+        construct 1 (\_ _ -> return ()) $ do
+            whenJust mt (\t -> delete add t ls)
+            final
+        immi
+      )
+    | (ck, construct) <- constructionKeys
+    -- removed the numbers because that just explodes the number of keys enough to crash the system
+    -- , (nk, n) <- numberKeys
+    , (mk, mt, xlst) <- [ (mk', k', do
+                             x <- xmt
+                             let simpx = simpleX x
+                                 tg = fmap fst $ target x
+                             ls <- windowSelectionFromMotion x
+                             return (Just $ if isJust simpx then fromJust simpx
+                                                            else if isJust tg then deminimizeFocus $ fromJust tg
+                                                            else return ()
+                                    , ls)
+                          )
+                        | (k, _, xmt) <- motionKeys
+                        , (mk', k') <- [ ("", k++" ") ] ++ if k == "S-4" then [ ("S-", "") ] else []
+                        ]
+                        ++
+                        [ ("", mt'++" ", fmap ((,) Nothing) xls') 
+                        | (mt', xls') <- structKeys "c"]
+    , (regk, ta, add, _, _) <- [regUnnamedKey] ++ quoteRefed (regKeys ++ regPromptKeys' "Cut windows to register: " "Add windows to register: ")
+    ]
+    -- dedicated construct method that allows insertion in different locations
+    ++
+    [ (regk++"c "++nk++gk++ipk++" "++ck, \immi final -> do
+            t <- btio
+            (repls, mt) <- flip ifInVisualMode (return ([], Nothing)) $ do
+                        -- we should get the visually selected windows and remove them if necessary
+                        wins <- onSelectedWindows return
+                        -- go to the top of the selected windows (if any)
+                        case wins of
+                             h:_ -> deminimizeFocus h
+                             _ -> return ()
+                        mt <- ta return
+                        return (wins, mt)
+            construct n (\mpf w -> do
+                let trans _ (Just s@(W.Stack (G.G l (Just st@(W.Stack f u d))) _ _)) = 
+                        let st' = W.filter (/= w) st
+                            ls = case (break ((== mpf) . Just) (W.integrate' st'), inp) of
+                                      ((bf, pf:aft), After) -> bf++(pf:w:aft)
+                                      ((bf, aft), Head) -> w:(bf++aft)
+                                      ((bf, aft), _) -> bf++aft++[w]
+                        in case (break (==f) ls, inp) of
+                            (_, Before) -> Just s
+                            ((bf, af:aft), _) -> Just s { W.focus = G.G l (Just $ W.Stack af (reverse bf) aft)}
+                            _ -> Just s { W.focus = G.G l (W.differentiate ls)}
+                    trans _ s = s
+                if inp == Before 
+                   then return () 
+                   else do
+                       sendMessage $ G.ToFocused $ SomeMessage $ G.Modify trans 
+                ) $ do
+                    atio t
+                    -- check if we need to remove visually selected windows
+                    case (repls, mt) of
+                         (a:as, Just t) -> delete add t (a:as) >> refresh
+                         _ -> return ()
+                    final
+            immi
+      )
+    | (nk, n) <- numberKeys
+    , (gk, btio, atio) <- [ ("", return False, \_ -> return ())
+                          , ("g ", do
+                                XS.put $ InsertOlderToggleBackUp (False, False)
+                                InsertOlderToggle t <- XS.get
+                                XS.put $ InsertOlderToggle $ not t 
+                                return t
+                             , \t -> do
+                                 XS.put $ InsertOlderToggle t
+                                 runLogHook)]
+    , (ipk, inp) <- insertPositionKeys
+    , (ck, construct) <- constructionKeys
+    , (regk, ta, add, _, _) <- [regUnnamedKey] ++ quoteRefed (regKeys ++ regPromptKeys' "Cut windows to register: " "Add windows to register: ")
+    ]
+
 pasteCommands = concatMap (processKey . addPrefix)
     [ (regk++cmd, ta (paste i np xls) >> return ())
     | (cmd, i, np) <- [("p", False, True)
@@ -2953,21 +3127,12 @@ pasteCommands = concatMap (processKey . addPrefix)
                       , ("g p", True, True)
                       -- , ("g S-p", True, False)
                       ]
-    , (regk, ta, _, _, xls) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys "Paste windows from register:" ++ regReadonlyKeys)
+    , (regk, ta, _, _, xls) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys "Paste windows from register: " ++ regReadonlyKeys)
     ]
 visualCommands = 
     [ ("M-v", enterVisualMode Win)
     , ("M-S-v", enterVisualMode Row)
     , ("M-C-v", enterVisualMode Col)
-    ]
-
-cloneCommands = concatMap (processKey . addPrefix) $
-    [ (pk++"c "++fsk++(filterKey g), (construct g) n Nothing)
-    | (nk, n) <- numberKeys
-    , (pk, fsk) <- zip (repeat "") ([nk++" "] ++ if n == 1 then [""] else [])
-                   ++
-                   [("g "++nk++" ", "")]
-    , g <- allTaskGroupsWithFilterKey $ ["c"] ++ if n /= 1 && pk == "" then [nk] else []
     ]
 
 historyCommands =
@@ -3000,14 +3165,22 @@ layoutCommands =
     | (k, n) <- tabKeys]
     ++
     [ ("M-<Space>", sendMessage (G.ToFocused $ SomeMessage $ G.ToEnclosing $ SomeMessage NextLayout) >> refresh)
-    , ("M-S-<Space>", nextOuterLayout >> refresh)
-    , ("M-S-b", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapUp)
-    , ("M-S-w", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapDown)
-    , ("M-C-S-k", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupUp)
-    , ("M-C-S-j", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify G.swapGroupDown)
-    , ("M-C-S-h", sendMessage $ G.Modify G.swapGroupUp)
-    , ("M-C-S-l", sendMessage $ G.Modify G.swapGroupDown)
-    , ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp False s)
+    , ("M-S-<Space>", nextOuterLayout >> refresh)]
+    -- swap interface (using the new countable interface)
+    ++
+    concatMap (processKey . addPrefix)
+    [ (nk++ck++"S-"++fk, sendMessage msg)
+    | (nk, n) <- numberMotionKeys
+    , (fk, ck, msg) <- [ ("b", "", G.ToFocused $ SomeMessage $ G.Modify $ G.swapUpN n)
+                       , ("w", "", G.ToFocused $ SomeMessage $ G.Modify $ G.swapDownN n)
+                       , ("k", "C-", G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupUpN n)
+                       , ("j", "C-", G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupDownN n)
+                       , ("h", "C-", G.Modify $ G.swapGroupUpN n)
+                       , ("l", "C-", G.Modify $ G.swapGroupDownN n)
+                       ]
+    ]
+    ++
+    [ ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp False s)
     , ("M-S-j", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsDown False s)
     , ("M-S-h", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsUp False s)
     , ("M-S-l", applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsDown False s)
@@ -3042,34 +3215,7 @@ layoutCommands =
     , ("M-S-t", runManageHookOnFocused $ (windowStyle currentTaskGroup) Prev)
     ]
 
-
-promptCommands = 
-    [ ("M-s " ++ af, initMatches >>= \r -> do
-        -- get the current workspace name
-        name <- getCurrentWorkspaceName
-        renameWorkspacePrompt (myXPConfig r) {
-              searchPredicate = repeatedGrep
-            , defaultText = name
-        })
-    | af <- ["S-c"] ]
-    ++
-    [ ("M-"++mf++"s "++nk++mk++af, fun)
-    | (mf, action, prompt) <- [ ("", windows . W.greedyView, "workspace")
-                              , ("S-", windows . W.shift, "move to workspace") ]
-    , (af, pos) <- [ ("i"  , Before)
-                   , ("S-i", Head)
-                   , ("a"  , After)
-                   , ("S-a", Last) ]
-    , (nk, n) <- fmap (\(a,b)->(a++" ", b)) numberKeys ++ [("", 1)]
-    , (mk, fun) <- [ ("", initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos n action)
-                   , ("M-", do
-                       nm <- getCurrentWorkspaceName
-                       p <- getCurrentWorkspaceDirectory 
-                       insertWorkspace nm pos n p action)
-                   ] 
-    ]
-    ++
-    [ ("M-r", initMatches >>= \r -> dynamicPrompt (myXPConfig r) { 
+mkDynamicPrompt' immediate final owi = initMatches >>= \r -> dynamicPrompt (myXPConfig r) { 
               changeModeKey = xK_VoidSymbol
             , searchPredicate = repeatedGrep
             , promptKeymap = M.fromList $ (M.toList $ myXPKeymap r)++[
@@ -3081,26 +3227,57 @@ promptCommands =
                 -- fmd related
                 , ((myModMask, xK_f), addOrTruncateTillPrefix "fmc ")
                 , ((myModMask, xK_n), setInputAndDone "fmc next")
+                , ((myModMask, xK_a), setInputAndDone "fmc rate")
                 , ((myModMask, xK_t), setInputAndDone "fmc toggle")
                 , ((myModMask, xK_s), setInput "fmc setch " >> endOfLine)
                 , ((myModMask, xK_w), setInputAndDone "fmc webpage")
                 -- system related
                 , ((myModMask, xK_l), setInputAndDone "systemctl suspend")
-                , ((myModMask, xK_r), setInputAndDone "reboot")
+                -- hot restart
+                , ((myModMask, xK_h), setInputAndDone "reboot")
                 , ((myModMask, xK_q), setInputAndDone myRestartCmd)
                 , ((myModMask, xK_x), setInputAndDone "systemctl poweroff")
+                , ((myModMask, xK_z), setInputAndDone "xset dpms force off")
                 -- run stuff on a terminal
-                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xterm -e " ++ escapeQuery ("loader "++ str ++ "; zsh"))
-            ]})
-    -- xmonad commands
-    -- , ("M-C-,", initMatches >>= xmonadPrompt . myXPConfig)
-    ]
-    -- search interface
-    ++
-    [ ("M-"++mf++"/", initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow a)
-    | (mf, p, a) <- [ ("", "Go to window: ", deminimizeFocus)
-                    , ("S-", "Bring window: ", shiftWindowsHere . wrapList)
+                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xterm -e zsh -ic " ++ escapeQuery (str ++ "; zsh"))
+            ]} immediate final owi
+mkDynamicPrompt i f = mkDynamicPrompt' i f def
+
+dynamicPromptCommand = ("M-r", mkDynamicPrompt) 
+
+promptCommands =
+    [ ("M-"++mf++"/", \immi final -> initMatches >>= \r -> mkSearchPrompt (myXPConfig r) {searchPredicate = repeatedGrep} p validWindow (a immi final))
+    | (mf, p, a) <- [ ("", "Go to window: ", \i f w -> deminimizeFocus w >> i >> f)
+                    , ("S-", "Bring window: ", \i f w -> shiftWindowsHere [w] >> i >> f)
                     ]
+    ]
+    ++
+    [ ("M-s " ++ af, \immi final -> do
+        r <- initMatches
+        -- get the current workspace name
+        name <- getCurrentWorkspaceName
+        renameWorkspacePrompt (myXPConfig r) {
+              searchPredicate = repeatedGrep
+            , defaultText = name
+        } immi final)
+    | af <- ["S-c"] ]
+    ++
+    [ ("M-"++mf++"s "++nk++mk++af, fun)
+    | (mf, action, prompt) <- [ ("", windows . W.greedyView, "workspace")
+                              , ("S-", \t -> onSelectedWindowsAfterMovingToTmpSpace $ \wins ->  windows (shiftWins t wins), "move to workspace") ]
+    , (af, pos) <- insertPositionKeys
+    , (nk, n) <- numberKeys
+    , (mk, fun) <- [ ("", \immi final -> initMatches >>= \r -> newWorkspacePrompt (myXPConfig r) {searchPredicate = repeatedGrep, autoComplete = Nothing} (prompt++" ("++(show pos)++")") pos n $ \t -> do
+                                    action t
+                                    immi
+                                    final)
+                   , ("M-", \immi final -> do
+                       nm <- getCurrentWorkspaceName
+                       p <- getCurrentWorkspaceDirectory 
+                       insertWorkspace nm pos n p action
+                       immi
+                       final)
+                   ] 
     ]
 
 
@@ -3133,6 +3310,7 @@ miscCommands toggleFadeSet =
     ]
 
 workspaceCommands = concatMap (processKey . addPrefix) $
+    -- workspace prompt interface
     [ (pk++mk++wk, gt >>= flip whenJust ta) 
     | (mk, ta) <- [ ("", windows . W.greedyView)
                   , ("S-", \t -> onSelectedWindowsAfterMovingToTmpSpace $ \wins ->  windows (shiftWins t wins)) 
@@ -3140,7 +3318,7 @@ workspaceCommands = concatMap (processKey . addPrefix) $
                   ]  
     , (pk, wk, gt) <- [("", "6", fmap Just lastWorkspaceTag)]
                       ++
-                      [ (pk', dk, do
+                      [ (nk, dk, do
                           st <- workspaceStack
                           let (ls, mct) = case st of
                                                Just (W.Stack f us ds) -> (if d == Prev then us else ds, Just $ W.tag f)
@@ -3149,8 +3327,8 @@ workspaceCommands = concatMap (processKey . addPrefix) $
                               mft = fmap (W.tag . (ls !!)) mn'
                           return $ if mft == mct then Nothing else mft)
                       | (dk, d) <- [("[", Prev), ("]", Next)]
-                      , (nk, n) <- numberKeys
-                      , pk' <- ["g "++nk++" "] ++ if n == 1 then [""] else [] ]
+                      , (nk, n) <- numberMotionKeys
+                      ]
                       ++
                       [ ("", t, fmap Just $ (if mk /= "S-" then toggleTag else quickWorkspace) t)
                       | t <- quickWorkspaceTags]
@@ -3158,11 +3336,11 @@ workspaceCommands = concatMap (processKey . addPrefix) $
     -- the find motion (just for completeness)
     ++
     [ ("f M-"++charToKeyStroke t, quickWorkspace [t] >>= windows . W.greedyView) 
-    | t <- fullSequence quickWorkspaceSequence ]
+    | t <- symbolSequence ]
     ++
     -- workspace motion key g M-S-0 and g M-S-4
     [ ("g M-0", allWorkspaceTags >>= windows . W.greedyView . head)
-    , ("g M-4", allWorkspaceTags >>= windows . W.greedyView . last) ]
+    , ("g M-S-4", allWorkspaceTags >>= windows . W.greedyView . last) ]
     ++
     [ (mk++"e", f)
     | (mk, f) <- [ ("", onNextNeighbour W.view)
@@ -3174,17 +3352,126 @@ workspaceCommands = concatMap (processKey . addPrefix) $
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
     -- }}}
 
-snippetsDirectory = "/home/lingnan/.snippets/"
-retrieveSnippetCommands = flip E.catch (\(SomeException e) -> return []) $ do
-    fs <- fmap (filter (not . (=~ "^\\."))) $ getDirectoryContents snippetsDirectory
-    return $ concatMap (processKey . addPrefix) 
-        [ (pk++"a "++mk++(joinStr " " $ fmap charToKeyStroke s), spawn $ "str=\"`cat "++escapeQuery (snippetsDirectory ++ s)++"`\"; res=\"$str\"; for ((i=1; i<"++show n++"; i++)); do res=\"$res $str\"; done; sleep 0.1; xdotool type \"$res\"")
-        | s <- fs 
+------------- marco recording
+
+-- requirement for macro names
+-- - no number (number will be interpreted as number of times instead)
+-- - no two macros shall have the same prefix (limitation of the keyboard system)
+-- - it should not be "/" or anything with that prefix (it's not really like that you can make that in the file system out as well)
+myMacrosDir = "/home/lingnan/.macros"
+writeData file d = io $ do
+  writeFile file (show d) `E.catch` \(SomeException e) ->
+                          hPutStrLn stderr ("error writing data: "++show e)
+  setFileMode file mode
+    where mode = ownerReadMode .|. ownerWriteMode
+
+readData file = io $ readData `E.catch` \(SomeException _) -> return Nothing
+ where
+    readData = do
+        xs <- bracket (openFile file ReadMode) hClose hGetLine
+        return $ readMaybe xs
+
+data MacroModeStorage = MMS (Maybe (String, [String])) deriving Typeable
+instance ExtensionClass MacroModeStorage where
+    initialValue = MMS Nothing
+
+appendMacroKey key = do
+    MMS a <- XS.get
+    case a of
+         Just (n, ls) -> XS.put $ MMS $ Just (n, ls++[key])
+         _ -> return ()
+
+retrieveMacro :: [(String, X () -> X () -> X ())] -> [String] -> X () -> X ()
+retrieveMacro bindingList list = foldl g id list
+            where g z k a = do
+                      let x = maybe (>>) snd $ find ((==k) . fst) bindingList
+                      z (x (return ()) a)
+
+toggleMacroMode name = do
+    MMS m <- XS.get
+    case m of
+         Just (n, a:as) -> writeData (myMacrosDir ++ "/" ++ n) (a:as)
+         _ -> return ()
+    case name of
+         Just n -> XS.put $ MMS $ Just (n, [])
+         _ -> XS.put $ MMS Nothing
+    runLogHook
+
+retrieveMacroCommands keybindings = flip E.catch (\(SomeException e) -> return []) $ do
+    fs <- fmap (filter (not . (=~ "^\\."))) $ getDirectoryContents myMacrosDir
+    let allMacroNames = nubBy (\a b -> let (s, l) = if length a < length b then (a, b) else (a, b)
+                                       in s `isPrefixOf` l
+                              ) $ fs 
+                                ++
+                                fmap fst defaultMacrosMap
+                                ++ 
+                                fmap wrapList (alphas ++ "._-")
+        allMacroKeys = zip (fmap (joinStr " " . fmap charToKeyStroke) allMacroNames) (fmap (return . Just) allMacroNames)
+                       ++
+                       [ ("/", do
+                            r <- initMatches
+                            let conf = (myXPConfig r) {
+                                    searchPredicate = prefixSearchPredicate
+                                }
+                                compl s = return $ filter ((searchPredicate conf) s) allMacroNames
+                            inputPromptWithCompl conf "Enter the name of the macro" compl
+                         )
+                       ]
+    return $ concatMap (processKey . addPrefix) $
+        [ ("a "++nk++sk, do
+            -- first try to play that as a xmonad macro
+            s' <- ms
+            case s' of
+                 Just s -> do
+                        mx <- readData (myMacrosDir ++ "/" ++ s) 
+                              >>= return . maybe (fmap snd $ find ((==s) . fst) defaultMacrosMap) Just 
+                              >>= return . fmap (retrieveMacro keybindings)
+                        case mx of
+                             Just x -> (iterate x (return ())) !! n
+                             _ -> do
+                                 let script = "str=\"`cat "++escapeQuery (myMacrosDir ++ "/" ++ s)++"`\"; [ -z \"$str\" ] && exit; res=\"$str\"; for ((i=1; i<"++show n++"; i++)); do res=\"$res $str\"; done; sleep 0.1; xdotool type \"$res\""
+                                 spawn script
+                 _ -> return ()
+          )
+        | (sk, ms) <- allMacroKeys
         , (nk, n) <- numberKeys
-        , (pk, mk) <- zip (["g "++nk++" "] ++ if n == 1 then [""] else []) (repeat "")
-                      ++
-                      [("", nk++" ")]
         ]
+        ++
+        [ ( "q " ++ k, n >>= toggleMacroMode) 
+        | (k, n) <- [ ("<Esc>", return Nothing) ]
+                    ++
+                    allMacroKeys
+        ]
+
+-- provides some macros in code that do not need the user to specify one by one
+-- each is a pair of (name, list of keybindings)
+defaultMacrosMap:: [(String, [String])]
+defaultMacrosMap =
+    [
+    ]
+    -- split a new window in a given direction
+    -- [ (d++tk, [trigger, "M-C-"++d]) 
+    -- | d <- ["h", "l", "j", "k"]
+    -- , (tk, trigger) <- [ (filterKeyList $ filterKey g, "M-c i "++(filterKey g)) 
+    --                    | g <- allTaskGroupsWithFilterKey ["c"]]
+    --                    ++
+    --                    [ ("/", "M-r") ]
+    -- ]
+
+-- macroRemapCommands are a complement of the defualt Macros Map; they use the macro mechanism 
+-- but are more flexible in terms of their mappings
+macroRemapCommands keybindings =
+    [ (k, (iterate (retrieveMacro keybindings macrols) (return ())) !! n) 
+    | (nk, n) <- numberKeys
+    , (k, macrols) <- [ ("M-c "++nk++"C-"++d++" "++tk, ["M-<Esc>", trigger, "M-C-"++d])
+                      | d <- ["h", "l", "j", "k"]
+                      , (tk, trigger) <- [ (filterKey g, "M-c i "++(filterKey g)) 
+                                         | g <- allTaskGroupsWithFilterKey ["c"]]
+                                         ++
+                                         [ ("/", "M-r") ]
+                      ]
+    ]
+
         
 
 -- visual mode we need a new datastructure to store the selections
@@ -3478,37 +3765,40 @@ processKey (k, a) =
 addPrefix (k, a) = ("M-"++k, a)
  
 
-myKeys toggleFadeSet snippetCommands = 
-    visualCommands
-    ++
-   (appendActionWithException (\_ -> ifInVisualMode exitVisualMode (return ()))  motionKeyCommands
-    $
-    layoutCommands
-    ++
-    promptCommands
-    ++
-    historyCommands
-    ++
-    miscCommands toggleFadeSet
-    ++
-    workspaceCommands
-    ++
-    snippetCommands
-    ++
-    cloneCommands
-    ++
-    (appendActionWithException saveLastCommand (concatMap (processKey . addPrefix)
-    [ (pk++".", getLastCommand >>= sequence_ . take n . repeat . id) 
-    | (nk, n) <- numberKeys
-    , pk <- ["g "++nk++" "] ++ if n == 1 then [""] else []
-    ])
-    $
-    cutCommands
-    ++
-    pasteCommands
-    ++
-    yankCommands)
-    )
+appendablize (k, ka) = (k, \immi final -> ka >> immi >> final)
+appendImmediate f (k, ka) = (k, \immi final -> ka (f >> immi) final)
+normalize = fmap (\(k, ka) -> (k, ka (return ()) (return ())))
+-- this is the version that allows for appending an action when the designed action has finished
+myAppendableKeys :: IORef (S.Set Window) -> [(String, X () -> X () -> X ())]
+myAppendableKeys toggleFadeSet =
+    fmap (\(k, ka) -> flip appendImmediate (k, ka) $ appendMacroKey k)
+       (fmap appendablize (visualCommands ++ motionKeyCommands)
+        ++
+        fmap (appendImmediate $ ifInVisualMode exitVisualMode $ return ())
+           (fmap appendablize (layoutCommands ++ historyCommands ++ miscCommands toggleFadeSet ++ workspaceCommands)
+            -- dynamic prompt
+            ++
+            [dynamicPromptCommand]
+            ++
+            promptCommands
+            ++
+            fmap appendablize (concatMap (processKey . addPrefix)
+            [ (nk++".", getLastCommand >>= sequence_ . take n . repeat . id) 
+            | (nk, n) <- numberMotionKeys])
+            ++
+            fmap (\(k, ka) -> flip appendImmediate (k, ka) $ saveLastCommand $ ka (return ()) (return ()))
+               (fmap appendablize (cutCommands ++ pasteCommands ++ yankCommands)
+                ++
+                changeCommands
+               )
+           )
+       )
+
+myKeys toggleFadeSet = do
+    let keys = myAppendableKeys toggleFadeSet
+    macroCommands <- retrieveMacroCommands keys
+    return $ (normalize keys) ++ macroCommands ++ macroRemapCommands keys
+
 -- }}}
 
 myXMonadConfig = defaultConfig { 
@@ -3529,10 +3819,10 @@ myXMonadConfig = defaultConfig {
 main = do
     toggleFadeSet <- newIORef S.empty
     dzenLogBar <- myStatusBars
-    snippetCommands <- retrieveSnippetCommands
+    allKeys <- myKeys toggleFadeSet
     -- urgencyhook is not used currently due to conflict with the wallpaper system
     xmonad $ ewmh $ U.withUrgencyHook U.NoUrgencyHook $ myXMonadConfig {
             logHook = myLogHook toggleFadeSet dzenLogBar 
-        } `additionalKeysP` (myKeys toggleFadeSet snippetCommands)
+        } `additionalKeysP` allKeys
 
 -- }}}

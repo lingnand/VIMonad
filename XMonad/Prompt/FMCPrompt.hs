@@ -2,6 +2,7 @@ module XMonad.Prompt.FMCPrompt
     ( mkFMCPrompt
     , FMCPrompt(..)
     , fmcAction
+    , fmcAction'
     , fmcComplFunc
     , splitArg
     , isCmdPrefixOf
@@ -15,6 +16,7 @@ import Data.List.Split
 import qualified Data.Text as T
 import XMonad.Util.Run
 import XMonad.Hooks.DynamicLog (trim)
+import XMonad.Hooks.OnWindowsInserted
 
 ---- constant
 fmcSetch = "setch"
@@ -71,12 +73,19 @@ fmcComplFunc s =
             then return fmcAllowedBitRates 
             else return $ filter (isPrefixOf cmd) fmcAllCompletions
 
-fmcAction s = 
+fmcAction' immi final owi s = 
     let (cmd', arg) = splitArg s
         cmd = if cmd' `isCmdPrefixOf` fmcSetch then fmcSetch
                                             else if cmd' `isCmdPrefixOf` fmcBitRate then fmcBitRate
                                             else cmd'
-        script = "fmc " ++ cmd ++ " " ++ escapeQuery arg
-    in spawn script
+        run = spawn $ "fmc " ++ cmd ++ " " ++ escapeQuery arg
+    in if cmd == "webpage" then applyOnWindowsInserted owi {
+                                      numberOfWindows = 1
+                                    , logFinished = \a b -> do
+                                        (logFinished owi) a b
+                                        final
+                                } >> run >> immi
+                           else run >> immi >> final
+fmcAction = fmcAction' (return ()) (return ()) def
 
 mkFMCPrompt c = mkXPrompt FMCPrompt c fmcComplFunc fmcAction
