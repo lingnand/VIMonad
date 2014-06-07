@@ -1776,7 +1776,7 @@ dpromptComplFunc c cmds home hist s = do
                             ["top", ""] | ntailsp == 1-> output (myScriptsDir++"/xtop") [show topLimit]
                             ["free", ""] | ntailsp == 1 -> output "free" []
                             ["ifconfig", ""] | ntailsp == 1 -> output "ifconfig" []
-                            ["git", gcmd] | gcmd `elem` ["", "status"] && ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
+                            ("git":gitcmds) | gitcmds `elem` [[""], ["status", ""]] && ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
                             -- only gives the prime command completion on three spaces
                             ["git", pa] -> gitcmdcmp pa
                             -- in all other instances we should give the log information
@@ -1940,7 +1940,7 @@ vbNextCompletion cmd ls = last $ words $ ls !! ni
                       Just i -> if i >= length ls - 1 then 0 else i+1
                       Nothing -> 0 
 vbHighlightPredicate = flip vbIsEqualToCompletion
-vbAction s = getCurrentWorkspaceDirectory >>= \d -> runShell $ "vb -C " ++ escapeQuery ("set download-path="++d) ++ " " ++ escapeQuery s
+vbAction s = runShell $ "vb " ++ escapeQuery s
 ----- if it's empty then return the top 10 results from history
 vbComplFunc s
     | null $ trim s = do fmap lines $ runProcessWithInput "vbhistory" [(show vbhistorySize)] "" 
@@ -3232,12 +3232,13 @@ mkDynamicPrompt' immediate final owi = initMatches >>= \r -> dynamicPrompt (myXP
                 , ((myModMask, xK_s), setInput "fmc setch " >> endOfLine)
                 , ((myModMask, xK_w), setInputAndDone "fmc webpage")
                 -- system related
-                , ((myModMask, xK_l), setInputAndDone "systemctl suspend")
+                -- suspend after one sec to avoid keyboard-mashing to wake up the machine again
+                , ((myModMask, xK_l), setInputAndDone "sleep 1; systemctl suspend")
                 -- hot restart
                 , ((myModMask, xK_h), setInputAndDone "reboot")
                 , ((myModMask, xK_q), setInputAndDone myRestartCmd)
                 , ((myModMask, xK_x), setInputAndDone "systemctl poweroff")
-                , ((myModMask, xK_z), setInputAndDone "xset dpms force off")
+                , ((myModMask, xK_z), setInputAndDone "sleep 1; xset dpms force off")
                 -- run stuff on a terminal
                 , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xterm -e zsh -ic " ++ escapeQuery (str ++ "; zsh"))
             ]} immediate final owi
@@ -3674,7 +3675,7 @@ applySelectedWindowStack reversal fun = do
 
 paste invertInsert normalP xls register = do
     InsertOlderToggle t <- XS.get
-    wins <- case register of 
+    ws <- case register of 
                  -- use the default register
                  "" -> do
                      -- first get the register content
@@ -3688,13 +3689,16 @@ paste invertInsert normalP xls register = do
                              _ -> mvWindows (show $ (read t)-1) mv rep
                      mvWindows "9" mv []
                  _ -> xls register
+    -- here's the tricky part about this: when we order windows, we prioritise the more recently minimized windows; however, when we paste windows from registers, we need to reverse that such that the old windows come first
+    let wins = reverse ws
     if not (null wins)
        then do
             markWindowsSelection wins
             let t' = if invertInsert then not t else t
             case (t', normalP) of
-                 (False, True) -> shiftWindowsHereAndFocusLast True (Just (head wins)) wins
-                 (False, False) -> shiftWindowsHereAndFocusLast False (Just (head wins)) wins
+                 -- focus the last window (as in vim which places cursor on the last element)
+                 (False, True) -> shiftWindowsHereAndFocusLast True (Just (last wins)) wins
+                 (False, False) -> shiftWindowsHereAndFocusLast False (Just (last wins)) wins
                  (True, True) -> shiftWindowsHereAndFocusLast True Nothing wins
                  (True, False) -> shiftWindowsHereAndFocusLast False Nothing wins
        else return ()
@@ -3716,8 +3720,11 @@ cut add register ls = flip correctFocus ls $ \wins -> do
                         deleteWindowsSelection wins
                         mapM_ minimizeWindow wins
                         if register /= ""
-                           -- put these windows into that register
-                           then putWindowsIntoRegister add register wins 
+                           then do
+                               -- clensing the tags for these windows (when we move/cut windows into a register, we'd expect the original tag lost)
+                               mapM_ unTag wins
+                               -- put these windows into that register
+                               putWindowsIntoRegister add register wins 
                            else let mv t rep _ = case t of
                                         -- we should check if this is the only tag the windows have
                                          -- "9" -> filterM (\w -> do
