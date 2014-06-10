@@ -1,0 +1,3 @@
+#!/bin/sh
+
+timeout 2 du -h --max-depth=1 apparent-size "${@:2}" | column -t -s $'\t' | tail -n "$1"

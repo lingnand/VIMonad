@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# $1 is the width, $2 the height
+# determine if the first argument is a file
+if [ -e "$3" ]; then
+    if [ -e "$4" ]; then
+        diff -r "$3" "$4" | head -n "$2"
+    else
+        git --no-pager diff "$3" | head -n "$2"
+    fi
+else
+    args=()
+    for a in "${@:3}"; do
+        args+=("-G" "$a")
+    done
+    git --no-pager diff --stat=$1 "${args[@]}" | head -n "$2"
+fi

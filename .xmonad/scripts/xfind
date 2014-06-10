@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# test if the second argument is a dir; if it is then find in that dir
+if [ -d "$2" ]; then
+    d="$2" 
+    ind=3
+else 
+    d='.'
+    ind=2
+fi
+
+args=()
+for a in "${@:$ind}"; do 
+    args+=("-iwholename" "*$a*")
+done
+
+timeout 0.05 find -L "$d" \( -name .git -o -name *.hi -o -name *.o -o -name _darcs \) -prune -o -true "${args[@]}" -print | head -n "$1"

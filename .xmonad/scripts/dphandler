@@ -1,0 +1,21 @@
+#!/bin/zsh
+
+#we should try to import the fasd stuff if it's not already imported
+
+command_not_found_handler () {
+    rifle "$1"
+}
+
+# test if the first file exists
+# if [ -e "$1" ]; then           
+#     if [ -f "$1" ] && [ -x "$1" ] && [[ "`file -iL "$1"`" = */x-* ]]; then
+#         "`realpath "$1"`" "${@:2}"
+#     else
+#         rifle "$@"
+#     fi
+# elif [[ "$1" = */* ]]; then
+if [ -e "$1" ] || [[ "$1" = */* ]]; then
+    rifle "$@"
+else
+    "$@"
+fi

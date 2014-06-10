@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# a simple script that gets the output from the xclip and check against the given dictionary
+# $1 dictionary $2 the width
+
+"${0%/*}/xsdcv" "$1" "`xsel`" "$2"
+
+

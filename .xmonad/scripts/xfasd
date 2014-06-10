@@ -1,0 +1,4 @@
+#!/bin/sh
+
+# fasd -RtalB viminfo | head -n 200
+timeout 1 fasd -Rlt "${@:2}" | head -n "$1"

@@ -1,0 +1,17 @@
+#!/bin/sh
+
+LIBROOT="$HOME/DB"
+
+# 1: the number limiting factor
+# 2: whether create mode should be turned on or not
+#   note: with create mode the argument must contain at least one '/' (to create a directory at the libroot, put '/<name of the directory')
+
+if $2; then
+    term="${@:3}"
+    collapse="$LIBROOT/${term#/}"
+    if [ -d "$collapse" ] || ( [[ "$term" = */* ]] && mkdir "$collapse" ); then
+        echo "$collapse"
+    fi
+else
+    timeout 0.05 tag "${@:3}" | head -n "$1"
+fi

@@ -1,0 +1,4 @@
+#!/bin/sh
+
+export MANWIDTH="$1"
+man "${@:3}" | head -n "$2"

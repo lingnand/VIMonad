@@ -1,0 +1,12 @@
+#! /bin/sh
+
+# test if the second argument is a dir; if it is then find in that dir
+if [ -e "$2" ]; then
+    d="${2%/}"
+    ind=3
+else 
+    d="$PWD"
+    ind=2
+fi
+
+pdfgrep -C line -HR "${@:$ind}" "$d" | head -n "$1"
