@@ -2,7 +2,7 @@
 
 VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM. Some of the featurs include
 
-* [Split layout](#split): a 3-level nested layout that divides each workspace into a grid of rectangular areas each containing unlimited number of tabs (like [Notion](http://notion.sourceforge.net/), with added advantage of dynamic resizing)
+* [Split layout](#layout): a 3-level nested layout that divides each workspace into a grid of rectangular areas each containing unlimited number of tabs (like [Notion](http://notion.sourceforge.net/), with added advantage of dynamic resizing)
 * [Motion](#motion): navigating around windows, split panes, workspaces with countable motion keys
 * [Command](#command): delete, yank windows with register + motion support
 * [Macro](#macro): record and play macros
@@ -26,18 +26,30 @@ VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM
 1. clone the repo somewhere
 2. move all the scripts under [bin](bin) to a directory included in `$PATH`
 3. copy files under [.xmonad](.xmonad) to `~/.xmonad` (note your old xmonad configuration will be overriden)
-    * [.xmonad/xmonad.hs](.xmonad/xmonad.hs) serves as a template config file; modify it if you'd like
+    * [.xmonad/xmonad.hs][xmonad.hs] serves as a template config file; modify it if you'd like
 4. `cd` into [xmonad](xmonad); `cabal install`
 5. `cd` into [XMonadContrib](XMonadContrib); `cabal install`
 
-## <a id="split"></a>Layout
+## Task group
 
-## <a id="motion"></a>Motion
+A major concept of VIMonad is task group. A task group defines a groups of windows that share the same or similar characteristics e.g., vim terminal windows, browser windows, etc.
 
-## <a id="command"></a>Command
+Checkout [xmonad.hs][xmonad.hs] for how to define task groups.
 
-## <a id="macro"></a>Macro
+Checkout [Taskgroup.hs](XMonadContrib/XMonad/Vim/TaskGroup.hs) for source about task groups.
 
-## <a id="visual"></a>Visual
+## Layout
 
-## <a id="prompt"></a>Prompt
+<!-- ![]() -->
+
+## Motion
+
+## Command
+
+## Macro
+
+## Visual
+
+## Prompt
+
+[xmonad.hs]: .xmonad/xmonad.hs "VIMonad template configuration"
