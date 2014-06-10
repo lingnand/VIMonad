@@ -1,0 +1,123 @@
+#!/usr/bin/bash
+
+## setup
+REPO="$HOME/Pictures/wallpapers"
+DEFAULT_REPO=""
+fav_location="$REPO/#favorites"
+exclude_location="$REPO/others"
+
+trash_location="$HOME/.Trash"
+feh_option='--bg-max'
+current_wallpaper_file="$HOME/.wallpaper"
+
+usage()
+{
+    cat << EOF
+    usage: [ -h ] [-m | -s] [-L] [-D | -E | -F] [-H] [-S] [Repo/File]
+
+    OPTIONS:
+    -h      print this help message
+    -m      maximize the image to fit (cover all pixels but without scale); exclusive with -s
+    -s      scale to fit
+    -L      select the last used image and apply it as the wallpaper; with this option the [Repo/File] argument is disregarded
+    -H      select high quality images (equal or above current screen resolution)
+    -D      delete the current wallpaper and change to next
+    -E      exclude the current wallpaper (move to the exclude directory)
+    -F      copy the current wallpaper to the favorite folder and change to the next
+    -S      enable synchronized wall-paper change in Mac system (only applicable if you are running Arch in a VBox)
+EOF
+}
+
+## variables
+repo=
+choose_high_quality=false
+move_loc=
+copy_loc=
+synchronize=false
+# get current resolution of the screen
+screen_width=$(screen-res width)
+screen_height=$(screen-res height)
+current_wallpaper="`cat "$current_wallpaper_file"`"
+
+# pass in some options to match 
+while getopts "msHDSFELh" OPTION
+do
+    case $OPTION in
+        m)
+            feh_option='--bg-max'
+            ;;
+        s)
+            feh_option='--bg-fill'
+            ;;
+        L)
+            repo="$current_wallpaper"
+            ;;
+        H)
+            choose_high_quality=true
+            ;;
+        D)
+            move_loc="$trash_location"
+            ;;
+        S)
+            synchronize=true
+            ;;
+        F)
+            copy_loc="$fav_location"
+            ;;
+        E)
+            move_loc="$exclude_location"
+            ;;
+        ?)
+            usage
+            [ "$OPTION" = 'h' ] && exit 0 || exit 1
+            ;;
+    esac
+done
+
+index=$((OPTIND-1))
+shift $index
+if [ -z "$repo" ]; then
+    [ $# -ge 1 ] && repo="$1" || repo="$DEFAULT_REPO"
+fi
+
+# delete the current wallpaper if necessary
+if [ -n "$move_loc" ] && [ -n "$current_wallpaper" ]; then
+    mv "$current_wallpaper" "$move_loc"
+    ## rewrite the .wallpaper
+    echo "$move_loc/${current_wallpaper##*/}" > "$current_wallpaper_file"
+elif [ -n "$copy_loc" ] && [ -n "$current_wallpaper" ]; then
+    cp "$current_wallpaper" "$copy_loc"
+fi
+
+
+find "$repo" -type f \( -name '*.jpg' -o -name '*.png' \) | shuf | while read line
+do
+    echo "`realpath "$line"`"
+    #echo "image=$line"
+    image_width="`identify -format "%w" "$line"`"
+    image_height="`identify -format "%h" "$line"`"
+    ! [ "$?" = 0 ] && continue
+    [ -z "$image_width" ] && image_width=0
+    [ -z "$image_height" ] && image_height=0
+    if ! $choose_high_quality || ((( "$image_width" > "$image_height" )) && (( "$image_width" >= "$screen_width" )) && (( "$image_height" >= "$screen_height" ))); then
+        # if synchronized is on then also change the wallpaper in the mac system
+        # first get the path in the Mac's system (assuming that we are using the same Pictures directory hierarchy)
+        if $synchronize; then
+            # first copy it to a tmp folder
+            extension=${line##*.}
+            macpath="/tmp/desktop.$extension"
+            scp "$line" "`hostaddr`:$macpath"
+            # then it's just a matter of running the command (default assumes that there's already wallpaper-change on the mac system
+            ssh "`hostaddr`" /Users/lingnan/bin/wallpaper-change '"'"$macpath"'"'
+        fi
+        # terminating the process to pass the output to the next 
+        exit 0
+    fi
+done | tail -n 1 | if read line && [ -n "$line" ]; then
+    # change the wallpaper
+    feh "$feh_option" --no-fehbg "$line"
+    echo "`realpath "$line"`" > "$current_wallpaper_file"
+else
+    echo "Unable to find a suitable image file even if the conditions specified are relaxed"
+    exit 1
+fi

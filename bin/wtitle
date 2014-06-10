@@ -1,0 +1,18 @@
+#! /bin/sh
+
+# this script aims to find the window id of a given process 
+# it does this by repeatedly getting the (parent) process id until a match is found in the window list
+output="`wmctrl -lp`"
+pid="${1:-$$}"
+while true; do
+    #echo "pid is $pid"
+    wid="`awk '$3=='"$pid"'{print $1}' <<< "$output"`"
+    #echo "wid found is $wid"
+    if [ -n "$wid" ]; then
+        echo "$wid"
+        break
+    else
+        pid="`ps -o ppid= -p $pid`"
+        ! [ "$?" == 0 ] && exit 1
+    fi
+done

@@ -1,3 +1,9 @@
-_darcs/*
-.authorspellings
-dist/*
+*/_darcs/*
+XMonadContrib/.authorspellings
+XMonadContrib/dist/*
+xmonad/dist/*
+*.o
+*.dyn_hi
+*.dyn_o
+*.hi
+*.errors

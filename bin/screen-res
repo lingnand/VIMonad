@@ -1,0 +1,32 @@
+#! /bin/sh
+usage() {
+    cat << END
+    help          -- print this help message
+    width(%w)     -- get the current screen width
+    height(%h)    -- get the current screen height
+    <a format string> -- a format string containing the specificers listed above
+END
+}
+
+info="$(xrandr --current)"
+screen_resolution="$(grep primary -A1 <<< "$info" | grep '*' | awk '{print $1}')"
+## if this turned out to be nil then we can try non-primary screens
+[ -z "$screen_resolution" ] && screen_resolution="$(grep '*' <<< "$info" | uniq | awk '{print $1}')"
+screen_width=$(echo "$screen_resolution" | cut -d 'x' -f1)
+screen_height=$(echo "$screen_resolution" | cut -d 'x' -f2)
+screen_height=${screen_height%%_*}
+
+case $1 in
+    width) echo "$screen_width";;
+   height) echo "$screen_height";;
+     help) usage;;
+        *)
+            if [ -n "$1" ]; then
+                f=$1
+                f=${f//\%w/"$screen_width"}
+                f=${f//\%h/"$screen_height"}
+                echo "$f"
+            fi
+            ;;
+esac
+

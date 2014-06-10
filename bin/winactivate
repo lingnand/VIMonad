@@ -1,0 +1,4 @@
+# /bin/sh
+# activate a given window by pid
+wtitle "$1" > ~/.xmonad/.winactivate
+xdotool key --clearmodifiers "Super_L+ctrl+alt+x"
