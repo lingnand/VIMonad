@@ -25,6 +25,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [FMD](http://github.com/lynnard/fmd) and [FMC](http://github.com/lynnard/fmc): if you'd like to use the radio service in VIMonad
 * [taskwarrior](http://taskwarrior.org/): task management from the prompt
 * [vimb](https://github.com/fanglingsu/vimb/): light-weight browser with its histories and bookmarks accessable from the prompt
+* [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
 
 ### Steps
 
@@ -86,6 +87,8 @@ A major concept of VIMonad is task group. A task group defines a groups of windo
 
 Each task group might have a `filterKey` to be referenced in motions. This can be a single key or a sequence of keys.
 
+Each task group also comes with a construction function that constructs a new instance of the group. 
+
 Checkout [xmonad.hs][xmonad.hs] for how to define task groups.
 
 Checkout [Taskgroup.hs](XMonadContrib/XMonad/Vim/TaskGroup.hs) for source about task groups.
@@ -98,6 +101,8 @@ Registers server two purposes in VIMonad:
 2. they also act as *registers* like those in vim - we can delete, move, yank windows into registers
     * when we delete or move windows into registers, they are actually minimized as mentioned before
     * when we yank windows into registers, the windows stay in their original places
+
+Attached registers are displayed for each window within the sqaure brackets of its tab label as `'<reg>['<another reg>]`.
 
 ## Keys
 
@@ -120,6 +125,8 @@ Some points to note:
     * an uppercase letter register *appends* the content to its lowercase letter register; the lowercase register *replaces* its original content (like in vim)
         * e.g., `'Adw` deletes the window and *appends* it to register `a`, whereaas `'adw` deletes the window and it then *replaces* the original content in register `a`
 * `<group>` means the `filterKey` of a task group in the current workspace
+* `<macro>` means a single- or multi- character macro register; the characters can be any that can be typed on the keyboard, except
+    * `/`: a special register that pops out a prompt for you to enter the exact name for the macro
 
 ### Motion
 
@@ -129,42 +136,93 @@ Some points to note:
     * when used as selection *leap* only selects the given specific tab
 * `f C-<row>`: moves to the given row
 * `C-<row>`: leaps to the given row
+    * when used as selection only selects the given specific row
 * `f M-<workspace>`: moves to the given workspace
 * `M-<workspace>`: leaps to the given workspace
-* `{g}[<num>]b`: the number of windows/tabs backwards
-* `b`: one window/tab backwards
-* `{g}[<num>]w`: the number of windows/tabs forward
-* `w`: one window/tab forward
+    * when used as selection only selects the given specific workspace
+* `[{g}<num>]b`: to the `<num>`'th windows/tabs back
+* `[{g}<num>]w`: to the `<num>`'th windows/tabs forward
 * `{g}0`: to the beginning of the line
-* `{g}$`: travel to the end of the line
+* `{g}$`: to the end of the line
 * `{g} C-0`: to the first row
 * `{g} C-$`: to the last row
 * `{g} M-0`: to the first workspace
 * `{g} M-$`: to the last workspace
 * `gg`: go to the top line
-* `gG`: go to the bottom line
-* `{g}[<num>]G`: go to the n'th line
+    * when used as selection this performs line-wise selection i.e. from the current line to the first line
+* `{g}G`: go to the bottom line
+    * when used as selection this performs line-wise selection
+* `{g}<num>G`: go to the n'th line
+    * when used as selection this performs line-wise selection
 * `g<group>`: cycle to the next window in `<group>`
-    * in selection mode this selects all windows in that group in the current workspace
+    * when used as selection this selects all windows in that group in the current workspace
 * `G<group>`: cycle to the previous window in `<group>`
 * `{g}'<reg>`: cycle to the next window in the `<reg>`
-    * in selection mode this selects all windows in that register
-* `{g}[<num>]k`: to the `<num>`'th line up
-* `k`: one line up
-* `{g}[<num>]j`: to the `<num>`'th line down
-* `j`: one line down
-* `{g}[<num>]h`: to the `<num>`'th row left
-* `h`: one row left
-* `{g}[<num>]l`: to the `<num>`'th row right
-* `l`: one row right
-* `{g}[<num>][`: to the `<num>`'th workspace left
-* `[`: one workspace left
-* `{g}[<num>]]`: to the `<num>`'th workspace right
-* `]`: one workspace right
+    * when used as selection this selects all windows in that register
+* `[{g}<num>]k`: to the `<num>`'th line up
+    * when used as selection this performs line-wise selection
+* `[{g}<num>]j`: to the `<num>`'th line down
+    * when used as selection this performs line-wise selection
+* `[{g}<num>]h`: to the `<num>`'th row back
+    * when used as selection this performs row-wise selection
+* `[{g}<num>]l`: to the `<num>`'th row forward
+    * when used as selection this performs row-wise selection
+* `[{g}<num>][`: to the `<num>`'th workspace back
+    * when used as selection this performs workspace-wise selection
+* `[{g}<num>]]`: to the `<num>`'th workspace forward
+    * when used as selection this performs workspace-wise selection
+
+### History jumplist
+
+* `M-o`: move to the previous window in the jumplist
+* `M-i`: move to the next window in the jumplist
+
+### Object
+
+Objects are used with commands, where the same command is applied to all the windows contained in the object.
+
+* `[<num>]<command>`: apply the command to `<num>` of lines starting from the current line
+    * `<command>` means the same letter as the command, e.g., `dd` deletes the current line
+* `[<num>]r`: apply the command to `<num>` of rows starting from the current one
+* `[<num>]s`: apply the command to `<num>` of workspaces starting from the current one
 
 ### Command
 
+#### Delete
+
+    ['<reg>]d<motion/object>
+
+* if `'<reg>` is given, minimize the windows selected by the `<motion/object>` and then attach them to register `<reg>`
+* else delete the windows selected by `<motion/object>`
+
+#### Move
+
+    ['<reg>]m<motion/object>
+
+Same as [delete](#delete), except
+
+* when `'<reg>` is not given, minimize the windows into `"` register
+    * push windows in registers `"12345678` one step forward to `123456789` and then forgetting the windows in register `9`
+    * the 'forgotten' windows are not deleted, they are just not referenced by any register anymore (except `*`)
+
+#### Yank
+
+    '<reg>y<motion/object>
+
+yank the windows selected by `<motion/object>` into register `<reg>`
+
 ### Macro
+
+Macros are by default stored under `~/.macros`. There are two types of macros
+
+1. a saved list of key sequences in VIMonad; these can be recorded directly in VIMonad
+2. an arbitrary piece of text; when triggered it is typed into the focused window via `xdotool`, like a snippet
+
+#### Actions
+
+* `q<macro>`: start recording the ensuing key sequences into `<macro>`
+* `q<Esc>`: stop recording
+* `a<macro>`: play the macro stored in `<macro>`
 
 ### Visual
 
