@@ -682,7 +682,10 @@ motionKeys xpc tgs =
     | (tk, ta, _, xt, xls) <- regKeys ++ regPromptKeys xpc "Select windows from register: " ++ regReadonlyKeys
     ]
 
-motionKeyCommands' xpc t = flip fmap (nubBy (\(_,a,_) (_,b,_) -> a == b) (motionKeys xpc t)) $ \(_, k, x) -> (k, do
+cmdMotionKeys xpc t = fmap (\(_,a,b) -> (a,b)) . nubBy (\(_,a,_) (_,b,_) -> a == b) $ motionKeys xpc t
+argMotionKeys xpc t = fmap (\(a,_,b) -> (a,b)) . nubBy (\(a,_,_) (b,_,_) -> a == b) $ motionKeys xpc t
+
+motionKeyCommands' xpc t = flip fmap (cmdMotionKeys xpc t) $ \(k, x) -> (k, do
     mf <- gets (W.peek . windowset)
     Motion mt simpx mtogls _ mtoggle mconstruct mfind <- x
     -- first save the function for future reference
@@ -717,7 +720,7 @@ windowSelectionFromMotion mt = do
                                                                     | fi == ti -> [f]
                                                                     | otherwise -> drop ti $ take fi wins
                         _ -> []                                                                      
-motionKeyWindowSelection xpc t = flip fmap (nubBy (\(a,_,_) (b,_,_) -> a == b) (motionKeys xpc t)) $ \(k, _, x) -> (k, x >>= windowSelectionFromMotion)
+motionKeyWindowSelection xpc t = flip fmap (argMotionKeys xpc t) $ \(k, x) -> (k, x >>= windowSelectionFromMotion)
 
 -- the first argument is the group key
 struct gfun n = do
@@ -891,7 +894,7 @@ changeCommands modKey xpc tgs = concatMap (processKey . addPrefix) $
                                                             else return ()
                                     , ls)
                           )
-                        | (k, _, xmt) <- motionKeys xpc tgs
+                        | (k, xmt) <- argMotionKeys xpc tgs
                         , (mk', k') <- [ ("", k++" ") ] ++ if k == "S-4" then [ ("S-", "") ] else []
                         ]
                         ++

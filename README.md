@@ -104,6 +104,22 @@ Registers server two purposes in VIMonad:
 
 Attached registers are displayed for each window within the sqaure brackets of its tab label as `'<reg>['<another reg>]`.
 
+### Insertion
+
+Insertion of windows/workspaces emulate the relevant aspects from vim
+
+* `a`: insert after the current window/workspace
+* `i`: insert before the current window/workspace
+* `A`: insert at the end of the line/workspaces
+* `I`: insert at the begining of the line/workspaces
+
+#### Insertion order
+
+When a window is inserted, you can choose to keep the focus on the old window without switching to the new window
+
+* `M-C-x` toggles this behavior
+* for some commands, an additional `g` *temporarily* toggles this behavior as well
+
 ## Keys
 
 Some points to note: 
@@ -125,6 +141,8 @@ Some points to note:
     * an uppercase letter register *appends* the content to its lowercase letter register; the lowercase register *replaces* its original content (like in vim)
         * e.g., `'Adw` deletes the window and *appends* it to register `a`, whereaas `'adw` deletes the window and it then *replaces* the original content in register `a`
 * `<group>` means the `filterKey` of a task group in the current workspace
+    * a special group is `c`, which is the task group of the *current window* 
+    * so for example `gc` cycles to the next window for the current task group, `dgc` deletes all the windows in the current task group
 * `<macro>` means a single- or multi- character macro register; the characters can be any that can be typed on the keyboard, except
     * `/`: a special register that pops out a prompt for you to enter the exact name for the macro
 
@@ -194,6 +212,7 @@ Objects are used with commands, where the same command is applied to all the win
 
 * if `'<reg>` is given, minimize the windows selected by the `<motion/object>` and then attach them to register `<reg>`
 * else delete the windows selected by `<motion/object>`
+* when `<motion/object>` is workspace-wise, always perform deletion of the workspaces (workspaces do not have register support) 
 
 #### Move
 
@@ -211,6 +230,47 @@ Same as [delete](#delete), except
 
 yank the windows selected by `<motion/object>` into register `<reg>`
 
+* workspace-wise `<motion/object>` are not supported
+
+#### Paste
+
+    '<reg>[g]p
+
+paste the windows in register `<reg>`
+
+* if `g` is supplied, temporarily alter the current [insertion order](#insertion-order)
+
+#### Change
+
+    ['<reg>]c<motion/object><group>
+
+[delete](#delete) the windows selected by `<motion/object>` into `<reg>` and replace them by a new window constructed for group `<group>`
+
+* here a special group is `/`, which brings up the [DynamicPrompt](#dynamic-prompt) to launch arbitrary windows
+
+#### Construct
+
+    ['<reg>]c<insert position><group>
+
+[delete](#delete) the [visually selected](#visual) windows into `<reg>`, construct a new window for group `<group>` and insert it at the position specified by `<insert position>`, which can be:
+
+* `a`: after the current window
+* `i`: before the current window (the default behavior of XMonad)
+* `A`: at the end of the line
+* `I`: at the beginning of the line
+* `C-j`: as a new line down
+* `C-k`: as a new line up
+* `C-h`: as a new row on the left
+* `C-l`: as a new row on the right
+
+* similar to [change](#change), a special group is `/`, which brings up the [DynamicPrompt](#dynamic-prompt) to launch arbitrary windows
+
+#### Unregister
+
+    u<motion/object>
+
+remove the association between the windows selected by `<motion/object>` with any registers
+
 ### Macro
 
 Macros are by default stored under `~/.macros`. There are two types of macros
@@ -221,10 +281,58 @@ Macros are by default stored under `~/.macros`. There are two types of macros
 #### Actions
 
 * `q<macro>`: start recording the ensuing key sequences into `<macro>`
+    * when recording the statusbar will show a `●` followed by the name of the macro
 * `q<Esc>`: stop recording
 * `a<macro>`: play the macro stored in `<macro>`
 
 ### Visual
+
+Similar to vim, VIMonad allows you to visually select windows. There is, however, an added subtlety about *passive/active* visual.
+
+#### Passive visual
+
+![](images/passive.jpg)
+
+Passive visual is indicated by a small triangle on right edge of the selected tab. It stays on unless `M-<Esc>` is pressed.
+
+Passive visual is useful for chaining [commands](#visual-command) - you can for example, move the selected windows into the left adjacent row and continue moving them up/down different lines.
+
+#### Active visual
+
+![](images/visual.jpg)
+
+Active visual is indicated by a small square on the right edge of the selected tab. This is more like the visual mode in vim.
+
+You can enter the active visual mode by
+
+* `M-v`: visually select the current window and enter window-wise selection mode
+* `M-S-v`: visually select the current line and enter line-wise selection mode
+* `M-C-v`: visually select the current row and enter row-wise selection mode
+
+In the active visual mode you can perform any [motion](#motion) to toggle the selection of windows in the respective range.
+
+To quit the active visual mode, press `M-<Esc>`; this commits the selected windows to *passive visual* (press `M-<Esc>` again to remove passive visual).
+
+#### Visual command
+
+These commands operate on
+
+1. when inside active visual mode, any windows currently selected
+2. or window(s) with passive visual in the current line, if any
+3. or the currently focused window
+
+* `['<reg>]x`: [delete](#delete) counterpart for selection
+* `['<reg>]X`: [move](#move) counterpart for selection
+* `y<reg>`: [yank](#yank) counterpart for selection
+* `M-S-u`: [unregister](#unregister) counterpart for selection
+* `M-S-{j,k}`: move the selected windows down/up a line
+* `M-S-{h,l}`: move the selected windows left/right a row
+* `M-C-{j,k}`: move the selected windows to a new line down/up
+* `M-C-{h,l}`: move the selected windows to a new row left/right
+
+### Swap
+
+There are many other 
 
 ### Prompt
 
