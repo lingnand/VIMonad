@@ -350,6 +350,8 @@ These commands operate on
 * `<M1-S-<tab>>`: insert the current window at `<tab>`
 * `<C-S-<row>>`: shift the current window to `<row>`
 * `<M-S-<workspace>>`: shift the current window to `<workspace>`
+* `M-<Space>`: toggle `Full` layout for the current row (maximize the focused window in the current row)
+* `M-S-<Space>`: toggle `Full` layout for the current workspace (maximize the current row in the workspace)
 
 ### Prompt
 
