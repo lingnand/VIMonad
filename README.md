@@ -251,9 +251,9 @@ paste the windows in register `<reg>`
 
 #### Construct
 
-    ['<reg>]c<insert position><group>
+    ['<reg>]c[<num>]<insert position><group>
 
-[delete](#delete) the [visually selected](#visual) windows into `<reg>`, construct a new window for group `<group>` and insert it at the position specified by `<insert position>`, which can be:
+[delete](#delete) the [visually selected](#visual) windows into `<reg>`, construct `<num>` of new window(s) for group `<group>` and insert it/them at the position specified by `<insert position>`, which can be:
 
 * `a`: after the current window
 * `i`: before the current window (the default behavior of XMonad)
