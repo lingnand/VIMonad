@@ -1,6 +1,6 @@
 # VIMonad
 
-VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM. Some of the featurs include
+VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM. Some of the features include
 
 * [Split layout](#layout): a 3-level nested layout that divides each workspace into a grid of rectangular areas each containing unlimited number of tabs (like [Notion](http://notion.sourceforge.net/), with added advantage of dynamic resizing)
 * [Motion](#motion): navigating around windows, split panes, workspaces with countable motion keys
@@ -8,7 +8,7 @@ VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM
 * [Macro](#macro): record and play macros
 * [Visual](#visual): advanced visual mode support that allows selection of windows via motion keys
 * [Prompt](#prompt): execute common actions via a variety of prompts that are capable of
-    * dynamically displaying the response of an action (e.g., `find` and `grep`) as completeable options (for selecting files)
+    * dynamically displaying the response of an action (e.g., `find` and `grep`) as complete-able options (for selecting files)
     * previewing files in the completion window
     * providing application-specific completion window (e.g, `taskwarrior`)
 
@@ -24,7 +24,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
 * [FMD](http://github.com/lynnard/fmd) and [FMC](http://github.com/lynnard/fmc): if you'd like to use the radio service in VIMonad
 * [taskwarrior](http://taskwarrior.org/): task management from the prompt
-* [vimb](https://github.com/fanglingsu/vimb/): light-weight browser with its histories and bookmarks accessable from the prompt
+* [vimb](https://github.com/fanglingsu/vimb/): light-weight browser with its histories and bookmarks accessible from the prompt
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
 
 ### Steps
@@ -55,7 +55,7 @@ workspace(s)
 
 * **workspaces**: the conventional sense of workspace as used in most window managers
     * the workspace labels are the symbols before `:<name>` 
-    * the system starts up with only one workspace `` ` `` (the tmp workspace)
+    * the system starts up with only one workspace `` ` `` (the temporary workspace)
     * new workspaces are added dynamically via [prompt](#workspace-prompt); the aim is to organize workspaces by **context** (each workspace for one task)
     * each workspace has its own *current directory*; this can be changed by `cd` in the [DynamicPrompt](#dynamic-prompt)
 * **rows**: vertical columns each spanning the entire the height of the screen
@@ -68,7 +68,7 @@ workspace(s)
     * each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas vimb windows have a green one
     * tabs are only shown for lines with more than one window (due to a bug in the tabbed layout, currently it's not possible to show tabs at all time)
 * **minimized**: a special case is that windows can be minimized in each workspace
-    * this happens when the window is deleted into a specifed register (see [delete](#delete))
+    * this happens when the window is deleted into a specified register (see [delete](#delete))
     * or the window is moved (into the unnamed or specified register) (see [move](#move))
     * the minimized windows are shown in the statusbar with `|` between them and labelled with the names of the registers they belong to
 
@@ -111,7 +111,7 @@ Insertion of windows/workspaces emulate the relevant aspects from vim
 * `a`: insert after the current window/workspace
 * `i`: insert before the current window/workspace
 * `A`: insert at the end of the line/workspaces
-* `I`: insert at the begining of the line/workspaces
+* `I`: insert at the beginning of the line/workspaces
 
 #### Insertion order
 
@@ -126,7 +126,7 @@ Some points to note:
 
 * to perform any key sequence mentioned below, you need to press the first character with the modMask defined by you, e.g., to trigger `g2w` (move down 2 windows), press `M-g` followed by `2` and `w`.
     * exceptions are keystrokes with a dash inside, e.g., `M1-<tab>`, for which you press the exact key combo
-* `{}` measn the key inside is not needed when the motion is passed as an argument to a command
+* `{}` means the key inside is not needed when the motion is passed as an argument to a command
 * `[]` means the key inside is optional
 * `<num>` can be any number from 2 to 9
 * `<tab>` means any tab label in the current *line*
@@ -139,7 +139,7 @@ Some points to note:
     * `*`: always references the minimized windows that aren't present in any other register
     * `'`: always references the last visited window
     * an uppercase letter register *appends* the content to its lowercase letter register; the lowercase register *replaces* its original content (like in vim)
-        * e.g., `'Adw` deletes the window and *appends* it to register `a`, whereaas `'adw` deletes the window and it then *replaces* the original content in register `a`
+        * e.g., `'Adw` deletes the window and *appends* it to register `a`, whereas `'adw` deletes the window and it then *replaces* the original content in register `a`
 * `<group>` means the `filterKey` of a task group in the current workspace
     * a special group is `c`, which is the task group of the *current window* 
     * so for example `gc` cycles to the next window for the current task group, `dgc` deletes all the windows in the current task group
@@ -149,28 +149,29 @@ Some points to note:
 ### Motion
 
 * `f<tab>`: moves to the tab with label `<tab>`
-* `M1-<tab>`: leaps to the given tab 
+* `<M1-<tab>>`: leaps to the given tab 
     * the difference between *leap* and `f` is that *leap* references the tab without travelling along any window
     * when used as selection *leap* only selects the given specific tab
-* `f C-<row>`: moves to the given row
-* `C-<row>`: leaps to the given row
+    * when used for navigation under normal mode, *leap* allows you to leap to the last visited window/row/workspace if the argument selects the currently focused window/row/workspace
+* `f<C-<row>>`: moves to the given row
+* `<C-<row>>`: leaps to the given row
     * when used as selection only selects the given specific row
-* `f M-<workspace>`: moves to the given workspace
+* `f<M-<workspace>>`: moves to the given workspace
 * `M-<workspace>`: leaps to the given workspace
     * when used as selection only selects the given specific workspace
 * `[{g}<num>]b`: to the `<num>`'th windows/tabs back
 * `[{g}<num>]w`: to the `<num>`'th windows/tabs forward
 * `{g}0`: to the beginning of the line
 * `{g}$`: to the end of the line
-* `{g} C-0`: to the first row
-* `{g} C-$`: to the last row
-* `{g} M-0`: to the first workspace
-* `{g} M-$`: to the last workspace
+* `{g}<C-0>`: to the first row
+* `{g}<C-$>`: to the last row
+* `{g}<M-0>`: to the first workspace
+* `{g}<M-$>`: to the last workspace
 * `gg`: go to the top line
     * when used as selection this performs line-wise selection i.e. from the current line to the first line
 * `{g}G`: go to the bottom line
     * when used as selection this performs line-wise selection
-* `{g}<num>G`: go to the n'th line
+* `{g}<num>G`: go to the `<num>`'th line
     * when used as selection this performs line-wise selection
 * `g<group>`: cycle to the next window in `<group>`
     * when used as selection this selects all windows in that group in the current workspace
@@ -294,7 +295,7 @@ Similar to vim, VIMonad allows you to visually select windows. There is, however
 
 ![](images/passive.jpg)
 
-Passive visual is indicated by a small triangle on right edge of the selected tab. It stays on unless `M-<Esc>` is pressed.
+Passive visual is indicated by a small triangle on the right edge of the selected tab. It stays on unless `M-<Esc>` is pressed.
 
 Passive visual is useful for chaining [commands](#visual-command) - you can for example, move the selected windows into the left adjacent row and continue moving them up/down different lines.
 
@@ -326,14 +327,26 @@ These commands operate on
 * `['<reg>]X`: [move](#move) counterpart for selection
 * `y<reg>`: [yank](#yank) counterpart for selection
 * `M-S-u`: [unregister](#unregister) counterpart for selection
-* `M-S-{j,k}`: move the selected windows down/up a line
-* `M-S-{h,l}`: move the selected windows left/right a row
-* `M-C-{j,k}`: move the selected windows to a new line down/up
-* `M-C-{h,l}`: move the selected windows to a new row left/right
+* `M-S-j`: move the selected windows down a line
+* `M-S-k`: move the selected windows up a line
+* `M-S-h`: move the selected windows left a row
+* `M-S-l`: move the selected windows right a row
+* `M-C-j`: move the selected windows to a new line down
+* `M-C-k`: move the selected windows to a new line up
+* `M-C-h`: move the selected windows to a new row left
+* `M-C-l`: move the selected windows to a new row right
 
-### Swap
+### Other useful keys
 
-There are many other 
+* `[g<num>]W`: swap the current window `<num>` of times down the line
+* `[g<num>]B`: swap the current window `<num>` of times up the line
+* `[g<num>]}`: shift the current window to the workspace `<num>` of distance down
+* `[g<num>]{`: shift the current window to the workspace `<num>` of distance up
+* `[g<num>]<C-]>`: swap the current workspace `<num>` of times down
+* `[g<num>]<C-[>`: swap the current workspace `<num>` of times up
+* `<M1-S-<tab>>`: insert the current window at `<tab>`
+* `<C-S-<row>>`: shift the current window to `<row>`
+* `<M-S-<workspace>>`: shift the current window to `<workspace>`
 
 ### Prompt
 
