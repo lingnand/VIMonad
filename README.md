@@ -380,6 +380,8 @@ where `<space action>` can be
 
 Dynamic prompt is an integral part of VIMonad as it handles almost all *program-related* aspects of the system. Instead of being a simple program launcher like *dmenu*, dynamic prompt is more like a full-fledged *shell* environment.
 
+Dynamic prompt is activated via `M-r`.
+
 You can
 
 * execute arbitrary shell commands, with full shell completion support
@@ -414,6 +416,15 @@ You can
     * `M-h`: reboot
     * `M-b`: input `vb ` in the prompt and enter [vimb][vimb] completion environment
     * `M-k`: input `tk ` in the prompt and enter [task][task] completion environment
+
+## Disclaimer
+
+I've put a lot of effort into VIMonad over the years, but there is no guarantee that it will work on your system. More specifically:
+
+* I haven't got a chance to test it on any computer other than my own personal one
+* VIMonad might cause slowdown (as compared to the vanilla XMonad)
+
+If you intend to try VIMonad and have encountered any problem, you're welcome to use the [issue tracker](https://github.com/lynnard/VIMonad/issues).
 
 [xmonad.hs]: .xmonad/xmonad.hs "VIMonad template configuration"
 [FMC]: http://github.com/lynnard/fmc "FMD radio client"
