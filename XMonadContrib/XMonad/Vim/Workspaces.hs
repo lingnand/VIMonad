@@ -130,7 +130,6 @@ import XMonad.Actions.SwapWorkspaces
 symbolSequence   = filter (/= '6') $ fullSequence quickWorkspaceSequence
 -- the workspace tags are implemented as a sliding window across the symbol stream; at any instant the tags are a list counting from a specific symbol
 symbolStream = symbolSequence ++ filter (not . (`elem` symbolSequence)) (enumFrom (toEnum 0))
-scratchpadWorkspaceTag = "ScratchpadWSHidden"
 tmpWorkspaceTag = [head quickWorkspaceSequence]
 quickWorkspaceTags = map wrapList quickWorkspaceSequence
 quickWorkspaceSequence = "`12345789"

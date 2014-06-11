@@ -25,7 +25,8 @@ module XMonad.Util.NamedScratchpad (
   allNamedScratchpadAction,
   namedScratchpadManageHook,
   namedScratchpadFilterOutWorkspace,
-  namedScratchpadFilterOutWorkspacePP
+  namedScratchpadFilterOutWorkspacePP,
+  scratchpadWorkspaceTag
   ) where
 
 import XMonad
@@ -150,7 +151,7 @@ someNamedScratchpadAction f confs n
 
 -- tag of the scratchpad workspace
 scratchpadWorkspaceTag :: String
-scratchpadWorkspaceTag = "NSP"
+scratchpadWorkspaceTag = "ScratchpadWSHidden"
 
 -- | Manage hook to use with named scratchpads
 namedScratchpadManageHook :: NamedScratchpads -- ^ Named scratchpads configuration
