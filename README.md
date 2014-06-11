@@ -254,7 +254,7 @@ paste the windows in register `<reg>`
 
 #### Construct
 
-    ['<reg>]c[<num>]<insert position><group>
+    ['<reg>]c[<num>][g]<insert position><group>
 
 [delete](#delete) the [visually selected](#visual) windows into `<reg>` (only applicable within active visual mode), construct `<num>` of new window(s) for group `<group>` and insert it/them at the position specified by `<insert position>`, which can be:
 
@@ -268,6 +268,7 @@ paste the windows in register `<reg>`
 * `C-l`: as a new row on the right
 
 * similar to [change](#change), a special group is `/`, which brings up the [DynamicPrompt](#dynamic-prompt) to launch arbitrary windows
+* when `g` is supplied, temporarily alter the current [insertion order](#insertion-order)
 
 #### Unregister
 
