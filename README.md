@@ -20,7 +20,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 
 ### Dependencies
 
-* `cabal`: for installing packages
+* [cabal](http://www.haskell.org/cabal/): for installing packages
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
 * [FMD](http://github.com/lynnard/fmd) and [FMC](http://github.com/lynnard/fmc): if you'd like to use the radio service in VIMonad
 * [taskwarrior](http://taskwarrior.org/): task management from the prompt
