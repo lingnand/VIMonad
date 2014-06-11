@@ -234,11 +234,12 @@ yank the windows selected by `<motion/object>` into register `<reg>`
 
 #### Paste
 
-    '<reg>[g]p
+    ['<reg>][g]p
 
 paste the windows in register `<reg>`
 
 * if `g` is supplied, temporarily alter the current [insertion order](#insertion-order)
+* if `<reg>` is not supplied, paste windows in the unnamed register `"`
 
 #### Change
 
