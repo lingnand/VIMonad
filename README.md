@@ -7,8 +7,8 @@ VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM
 * [Command](#command): delete, yank windows with register + motion support
 * [Macro](#macro): record and play macros
 * [Visual](#visual): advanced visual mode support that allows selection of windows via motion keys
-* [Prompt](#prompt): execute common actions via advanced prompts that is capable of
-    * dynamically displaying the response of the action (e.g., `find` and `grep`) as completable options (for selecting files)
+* [Prompt](#prompt): execute common actions via a variety of prompts that are capable of
+    * dynamically displaying the response of an action (e.g., `find` and `grep`) as completeable options (for selecting files)
     * previewing files in the completion window
     * providing application-specific completion window (e.g, `taskwarrior`)
 
@@ -24,6 +24,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
 * [FMD](http://github.com/lynnard/fmd) and [FMC](http://github.com/lynnard/fmc): if you'd like to use the radio service in VIMonad
 * [taskwarrior](http://taskwarrior.org/): task management from the prompt
+* [vimb](https://github.com/fanglingsu/vimb/): light-weight browser with its histories and bookmarks accessable from the prompt
 
 ### Steps
 
@@ -63,7 +64,7 @@ workspace(s)
     * the lines don't have labels; however, you'll be able to reference lines using `[num]G` as in vim
 * **tabs**: as the ones seen in modern browsers; each tab is a window
     * the tab labels are shown near the leftmost edge of each tab
-    * each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas vimb (light-weight browser) windows have a green one
+    * each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas vimb windows have a green one
     * tabs are only shown for lines with more than one window (due to a bug in the tabbed layout, currently it's not possible to show tabs at all time)
 * **minimized**: a special case is that windows can be minimized in each workspace
     * this happens when the window is deleted into a specifed register (see [delete](#delete))
@@ -116,6 +117,8 @@ Some points to note:
         * as in vim, the unnamed register pushes content through registers `1` to `9`
     * `*`: always references the minimized windows that aren't present in any other register
     * `'`: always references the last visited window
+    * an uppercase letter register *appends* the content to its lowercase letter register; the lowercase register *replaces* its original content (like in vim)
+        * e.g., `'Adw` deletes the window and *appends* it to register `a`, whereaas `'adw` deletes the window and it then *replaces* the original content in register `a`
 * `<group>` means the `filterKey` of a task group in the current workspace
 
 ### Motion
