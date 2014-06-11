@@ -22,10 +22,11 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 
 * [cabal](http://www.haskell.org/cabal/): for installing packages
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
-* [FMD](http://github.com/lynnard/fmd) and [FMC](http://github.com/lynnard/fmc): if you'd like to use the radio service in VIMonad
-* [taskwarrior](http://taskwarrior.org/): task management from the prompt
-* [vimb](https://github.com/fanglingsu/vimb/): light-weight browser with its histories and bookmarks accessible from the prompt
+* [FMD](http://github.com/lynnard/fmd) and [FMC][FMC]: if you'd like to use the radio service in VIMonad
+* [taskwarrior][task]: task management from the prompt
+* [vimb][vimb]: light-weight browser with its histories and bookmarks accessible from the prompt
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
+* [ranger](http://nongnu.org/ranger/): for deciding the program to launch files from [Dynamic prompt](#dynamic-prompt)
 
 ### Steps
 
@@ -65,7 +66,7 @@ workspace(s)
     * the lines don't have labels; however, you'll be able to reference lines using `[num]G` as in vim
 * **tabs**: as the ones seen in modern browsers; each tab is a window
     * the tab labels are shown near the leftmost edge of each tab
-    * each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas vimb windows have a green one
+    * each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas [vimb][vimb] windows have a green one
     * tabs are only shown for lines with more than one window (due to a bug in the tabbed layout, currently it's not possible to show tabs at all time)
 * **minimized**: a special case is that windows can be minimized in each workspace
     * this happens when the window is deleted into a specified register (see [delete](#delete))
@@ -214,6 +215,7 @@ Objects are used with commands, where the same command is applied to all the win
 * if `'<reg>` is given, minimize the windows selected by the `<motion/object>` and then attach them to register `<reg>`
 * else delete the windows selected by `<motion/object>`
 * when `<motion/object>` is workspace-wise, always perform deletion of the workspaces (workspaces do not have register support) 
+    * note: for the temporary workspace, `` ` ``, the windows inside will be deleted, but the workspace itself will always exist (to avoid the problem of erasing all workspaces)
 
 #### Move
 
@@ -352,6 +354,68 @@ These commands operate on
 
 #### Workspace Prompt
 
+As mentioned before, each workspace in VIMonad is dynamically allocated, and linked to a directory when being created. This is achieved via the workspace prompt - the prompt allows you to search in a *tag database* composed of directories with their names as tags (by default under `~/DB`), and select/create the directory for initializing the workspace.
+
+For example, say I want to create a new workspace after the current one for research on `VIMonad`, I can
+
+1. press `M-s a` (mnemonic: *space* create *after*), and enter in the prompt `VIMonad`
+2. if this *tag* already exists, I can see the directory in the completion window and choose it to have a new workspace rooted on that
+3. if it doesn't, I can instead input something like `indie/VIMonad` to create a new *tag* inside `indie` and root the new workspace in that new directory
+4. on the other hand I can also choose to not select any *tag* and just stick with `VIMonad` in the prompt; this gives me a new workspace rooted on home directory
+5. for 2 and 3 the new workspace will have an abbreviated version of the tag name as its workspace name; for 4 it will be whatever text you've put into the prompt
+
+The full syntax for the workspace prompt is:
+
+    s<space action>
+
+where `<space action>` can be
+
+* `a`: create workspace after the current one (or switch to an existing workspace)
+* `i`: create workspace before the current one (or switch to an existing workspace)
+* `A`: create workspace at the end of the workspace list (or switch to an existing workspace)
+* `I`: create workspace at the beginning of the workspace list (or switch to an existing workspace)
+* `C`: change the name of the current directory
+
 #### Dynamic Prompt
 
+Dynamic prompt is an integral part of VIMonad as it handles almost all *program-related* aspects of the system. Instead of being a simple program launcher like *dmenu*, dynamic prompt is more like a full-fledged *shell* environment.
+
+You can
+
+* execute arbitrary shell commands, with full shell completion support
+    * if the program name is eliminated, it defaults to opening/launching the file using `rifle` from `ranger`
+* preview files
+
+    ![](images/dprompt_preview.png)
+
+* search files dynamically with *search widgets*
+
+    ![](images/dprompt_search.png)
+
+    * `l` (locate): search for files recursively in a given directory (or the current one, if not specified) using `find`
+    * `t` (tag): search for a directory in the *tag database* using *find*
+    * `g` (grep): list all files containing the given words
+    * `h` (history): search for files launched in the past 
+* enter application-specific completion environment
+    * `git`
+
+        ![](images/dprompt_git.png)
+
+    * [task][task]
+
+        ![](images/dprompt_task.png)
+
+    * dictionaries (using `sdcv`)
+    * calculator (using `calc`)
+    * [vimb][vimb] history and bookmarks
+    * [FMC] radio service for douban.fm and jing.fm
+* execute shortcut commands, e.g.
+    * `M-d`/`M-C-d`: cycle dictionaries forward/backwards
+    * `M-h`: reboot
+    * `M-b`: input `vb ` in the prompt and enter [vimb][vimb] completion environment
+    * `M-k`: input `tk ` in the prompt and enter [task][task] completion environment
+
 [xmonad.hs]: .xmonad/xmonad.hs "VIMonad template configuration"
+[FMC]: http://github.com/lynnard/fmc "FMD radio client"
+[vimb]: https://github.com/fanglingsu/vimb/ "Vimb"
+[task]: http://taskwarrior.org/ "Taskwarrior"
