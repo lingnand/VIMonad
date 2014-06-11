@@ -420,6 +420,13 @@ You can
     * `M-b`: input `vb ` in the prompt and enter [vimb][vimb] completion environment
     * `M-k`: input `tk ` in the prompt and enter [task][task] completion environment
 
+#### Search prompt
+
+Search windows by register/title/workspace name in the current X session
+
+* `M-/`: search windows and navigate to the selected one
+* `M-?`: search windows and bring the selected one to the current workspace
+
 ## Disclaimer
 
 I've put a lot of effort into VIMonad over the years, but there is no guarantee that it will work on your system. More specifically:
