@@ -22,7 +22,9 @@ module XMonad.Layout.Minimize (
         MinimizeMsg(RestoreMinimizedWin,RestoreNextMinimizedWin,MinimizeWin),
         Minimize,
         getMinimizedWindows,
-        getCurrentMinimizedWindows
+        getCurrentMinimizedWindows,
+        setMinimized,
+        setNotMinimized
     ) where
 
 import XMonad

@@ -11,6 +11,7 @@ import qualified XMonad.StackSet as W
 import Data.List
 import XMonad.Actions.TagWindows
 import XMonad.Vim.Routine
+import XMonad.Vim.Minimize
 import XMonad.Hooks.DynamicLog (wrap)
 
 data WindowSearchPrompt = WindowSearchPrompt String
@@ -22,17 +23,14 @@ instance XPrompt WindowSearchPrompt where
 
 mkSearchPrompt config prompt predicate a = do
     -- we'd probably just get all the workspaces and then the windows inside
-    wss <- allWorkspaces
-    curr <- gets (W.workspace . W.current . windowset)
-    (l, r, gf, ml, float, _, _) <- getSides
     names <- getWorkspaceNames
+    ml <- getMinimizedWindows
+    wss' <- fmap (concatMap $ \s -> zip (repeat $ names $ W.tag s) $ W.integrate' $ W.stack s) allWorkspaces
+    let wss = wss' ++ zip (repeat "hidden") ml
     -- get the last window
     lm <- nextMatched History (return True)
-    let wswins = W.integrate' . W.stack
-        -- remove duplicate windows
-        cwins = nub $ l++gf++r++float++ml
-        winfo :: Window -> X (([String], String), Window)
-        winfo w = do
+    let winfo :: (String, Window) -> X (([String], String, String), Window)
+        winfo (wn, w) = do
             t <- runQuery title w
             tags'' <- getTags w
             let tags = sortRegs $ if Just w == lm then tags'++["'"] else tags'
@@ -40,18 +38,9 @@ mkSearchPrompt config prompt predicate a = do
                          [] | w `elem` ml -> ["*"]
                             | otherwise -> []
                          ts -> ts
-            return ((tags, t), w)
-        -- we must make sure there aren't duplicated entries
-        wp ws = fmap (concatMap (fmap (\(s, ((a,t,b), w)) -> ((a,t,if s == "" then b else b++" ["++s++"]"), w)) . zip ([""] ++ fmap show [1..])) . groupBy (\(a,_) (b,_) -> a == b) . fmap (attag (W.tag ws))) $ mapM winfo $ wswins ws
-        wr = fmap concat . mapM wp
-        attag t ((a,b),w) = ((a,names t,b),w)
-    (winfos, winls) <- case break ((==(W.tag curr)) . W.tag) wss of
-         (bf, c:af) -> do 
-                bis <- wr bf
-                ais <- wr af
-                cis <- wp curr
-                return $ unzip $ bis ++ cis ++ ais
-         (bf, _) -> fmap unzip $ wr bf
+            return ((tags, wn, t), w)
+        deduplicate = concatMap (fmap (\(s, ((a,t,b), w)) -> ((a,t,if s == "" then b else b++" ["++s++"]"), w)) . zip ([""] ++ fmap show [1..])) . groupBy (\(a,_) (b,_) -> a == b)
+    (winfos, winls) <- fmap (unzip . deduplicate) $ mapM winfo wss
     let fillsp ls = let l = maximum $ fmap length ls
                         fsp s = (take (l - length s) $ repeat ' ')++s
                     in fmap fsp ls

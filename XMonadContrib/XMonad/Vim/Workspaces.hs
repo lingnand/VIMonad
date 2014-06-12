@@ -10,7 +10,6 @@ module XMonad.Vim.Workspaces
     , allWorkspaces
     , allWorkspaceTags
     , allWorkspaceNames
-    , removeWorkspace
     , removeWorkspaces
     , removeAllWorkspaces
     , insertWorkspace
@@ -37,7 +36,6 @@ module XMonad.Vim.Workspaces
     , alwaysFalse
     , validWS
     , validWindow
-    , isMinimized
     , isInCurrentWorkspace
     , isFocused
     , isOneOfWindows
@@ -47,7 +45,6 @@ module XMonad.Vim.Workspaces
     , windowIsSelected
     , doSink
     -- operations
-    , deminimize
     , deminimizeFocus
     , killWindows
     , correctFocus
@@ -110,15 +107,15 @@ import XMonad.Vim.InsertPosition
 import XMonad.Vim.WorkspaceDirectories
 import XMonad.Vim.WorkspaceHandles
 import XMonad.Util.WorkspaceCompare
-import XMonad.Actions.WindowGo
+-- import XMonad.Actions.WindowGo
 import Data.List
 import Data.Maybe
 import qualified XMonad.Util.ExtensibleState as XS
 import qualified Data.Set as S
 import qualified XMonad.Layout.Groups as G
-import XMonad.Layout.Minimize
 import XMonad.Util.NamedScratchpad
 import XMonad.Vim.Term
+import XMonad.Vim.Minimize
 import XMonad.Util.WindowProperties
 import XMonad.Actions.GroupNavigation
 import XMonad.Hooks.FloatNext (runLogHook)
@@ -238,10 +235,12 @@ insertWorkspace name insp iter path fun = do
          [] -> return ()
          h:_ -> fun $ last res
 
-removeCurrentWorkspace = gets (W.currentTag . windowset) >>= removeWorkspace
-removeWorkspace = removeWorkspaces . wrapList
-removeAllWorkspaces = allWorkspaceTags >>= removeWorkspaces
-removeWorkspaces tags = do
+-- remove all workspaces (AND the hidden stack)!
+removeAllWorkspaces = do
+    allWorkspaceTags >>= removeWorkspaces killWindows
+    getMinimizedWindows >>= killWindows
+-- remove the specified workspaces; the windows will be passed to cmd for process 
+removeWorkspaces cmd tags = do
     -- remove all windows
     wst <- workspaceStack
     curr <- gets (W.currentTag . windowset)
@@ -249,13 +248,13 @@ removeWorkspaces tags = do
         ntags = filter (/= tmpWorkspaceTag) tags
         dp ts = (`elem` ts) . W.tag
         nwst = maybeToMaybe (W.filter (not . dp ntags)) wst
-    killWindows $ concatMap (W.integrate' . W.stack) todel
+    cmd $ concatMap (W.integrate' . W.stack) todel
     case nwst of
          Just (W.Stack nf _ _) | nft /= curr -> windows $ W.greedyView nft
                 where nft = W.tag nf
          _ -> return ()
     -- kill the scratchpads matching this workspace
-    mapM_ (\t -> ifWindows (isPerWSScratchpadBoundToWS t) (mapM_ killWindow) (return ())) ntags
+    -- mapM_ (\t -> allOrderedWindowsMatchingPredicate (isPerWSScratchpadBoundToWS t) (mapM_ killWindow) (return ())) ntags
     windows $ \s -> foldr removeWorkspaceByTag s ntags
     renameWorkspaces (zip (fmap W.tag (W.integrate' nwst)) $ fmap wrapList $ symbolStream)
     if length ntags < length tags then setWorkspaceNameByTag tmpWorkspaceTag "" >> saveWorkspaceDirectory "" tmpWorkspaceTag
@@ -374,7 +373,7 @@ getSides = do
     -- split the windows into two
     -- it's safer to get the windows for the current workspace from group stacks (it's more stable)
     gs <- G.getCurrentGStack
-    ml <- getCurrentMinimizedWindows
+    ml <- getMinimizedWindows
     let (l, r, gf) = maybe ([],[],[]) (\(W.Stack f u d) -> (reverse u, d, [f])) $ maybe Nothing G.toZipper gs
         (b, a') = break ((==W.currentTag winset). W.tag) wss
         a = if not $ null a' then tail a' else []
@@ -394,11 +393,6 @@ validWindow = ask >>= \w -> liftX $ do
         where containsWin w ws = case W.stack ws of
                    Just s -> w `elem` (W.focus s) : ((W.up s) ++ (W.down s))
                    Nothing -> False
-
-isMinimized = ask >>= \w -> liftX $ do
-    wss <- allWorkspaces
-    wins <- mapM getMinimizedWindows $ fmap W.layout wss
-    return $ w `elem` (concat $ wins)
 
 -- query bool defintion to matching windows in the current workspace
 isInCurrentWorkspace = ask >>= \w -> liftX $ do
@@ -447,9 +441,8 @@ isFloating :: Query Bool
 isFloating =  ask >>= \w -> liftX . gets $ M.member w . W.floating . windowset
 
 deminimizeFocus w = do
-    deminimize w 
+    deminimizeWindow w 
     focus w
-deminimize w = routeMessageToWS ((w `elem`) . W.integrate' . W.stack) (RestoreMinimizedWin w)
 
 killWindows ls = flip correctFocus ls $ \wins -> do
     deleteWindowsSelection wins
@@ -508,12 +501,14 @@ isPerWSScratchpadBoundToCurrentWS = ask >>= \w -> liftX $ gets (W.currentTag . w
 
 mkNamedScratchpad ls n = 
     case filter ((n==) . name) ls of
-         sp:_ -> ifWindows (isMinimized <&&> query sp) (\(w:_) -> do
-             deminimize w
-             -- if it is in the current workspace then their is no need to do namedscratchpadaction anymore
-             r <- runQuery isInCurrentWorkspace w
-             if r then focus w else nsc
-             ) nsc
+         sp:_ -> orderedWindowsMatchingPredicate (isMinimized <&&> query sp) >>= \ls -> 
+            case ls of
+                (w:_) -> do
+                     deminimizeWindow w
+                     -- if it is in the current workspace then there is no need to do namedscratchpadaction anymore
+                     r <- runQuery isInCurrentWorkspace w
+                     if r then focus w else nsc
+                _ -> nsc
          _ -> nsc
         where nsc = namedScratchpadAction ls n
 
@@ -743,7 +738,7 @@ applySelectedWindowStack reversal fun = do
          (Just os@(W.Stack f _ _), Just (mvs, mf)) -> do
                                            let wins = W.integrate os
                                                remains = filter (not . (`elem` mvs)) wins
-                                           -- temporarily move those windows to the scratchpad wokr
+                                           -- temporarily move those windows to the scratchpad workspace
                                            curr <- gets (W.currentTag . windowset)
                                            windows $ \s -> W.focusWindow mf $ foldr (W.shiftWin scratchpadWorkspaceTag) s mvs
                                            fun $ Just $ W.Stack mf [] [] 
@@ -769,25 +764,30 @@ swapWith t =
 shiftWins t wins s = foldr (W.shiftWin t) s wins
 
 -- if the focused element is inside the windows to be pasted then we can keep selecting that (is that ever useful though?)  
-shiftWindowsHere = shiftWindowsHereAndFocusLast True Nothing
-shiftWindowsHereAndFocusLast _ _ [] = return ()
+shiftWindowsHere [] = return ()
+shiftWindowsHere wins = shiftWindowsHereAndFocusLast (Just (last wins)) wins
+shiftWindowsHereAndFocusLast _ [] = return ()
 -- we can specify whether we want to keep focus 
 -- this defaults to keeping focus
-shiftWindowsHereAndFocusLast insertBefore f wins = do
+shiftWindowsHereAndFocusLast f wins = do
     -- deminimize all of them
     mf <- gets (W.peek . windowset)
     if maybeToList mf == wins 
        then return () 
        else do
-            mapM deminimize wins
-            curr <- gets (W.currentTag . windowset)
-            -- move to the temp workspace and then move back
-            -- move one by one because we can't be sure if the windows are the last one in the tab group (really annoying though)
-            mapM (windows . W.shiftWin scratchpadWorkspaceTag) wins
-            {-windows $ \s -> foldr (W.shiftWin scratchpadWorkspaceTag) s wins-}
-            mf <- gets (W.peek . windowset)
-            let fc = maybe (maybe id W.focusWindow mf) W.focusWindow f
-            if insertBefore
-               then windows $ \s -> fc $ foldr (W.shiftWin curr) s wins
+            mwins <- getMinimizedWindows
+            let fc mf = maybe (maybe id W.focusWindow mf) W.focusWindow f
+            if all (`elem` mwins) wins 
+               then do
+                   mf <- gets (W.peek . windowset)
+                   deminimizeWindows wins
+                   windows $ fc mf
+               else do
+                   deminimizeWindows wins
+                   curr <- gets (W.currentTag . windowset)
+                   mapM (windows . W.shiftWin scratchpadWorkspaceTag) wins
+                   mf <- gets (W.peek . windowset)
+            -- if insertBefore
+                   windows $ \s -> fc mf $ foldr (W.shiftWin curr) s wins
                -- this doesn't seem to work
-               else windows $ \s -> fc $ foldl (\s w -> W.swapDown $ W.shiftWin curr w s) s wins
+               -- else windows $ \s -> fc $ foldl (\s w -> W.swapDown $ W.shiftWin curr w s) s wins

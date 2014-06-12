@@ -331,6 +331,7 @@ library
                         XMonad.Util.XUtils
                         XMonad.Vim.InsertPosition
                         XMonad.Vim.InsertOlder
+                        XMonad.Vim.Minimize
                         XMonad.Vim.Prompt.Calc
                         XMonad.Vim.Prompt.Vimb
                         XMonad.Vim.Prompt.Dict

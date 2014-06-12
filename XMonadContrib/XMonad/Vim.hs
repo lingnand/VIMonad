@@ -40,7 +40,6 @@ import XMonad.Layout.Renamed
 import XMonad.Layout.Tabbed
 import XMonad.Layout.TiledTabs
 import XMonad.Layout.Simplest
-import XMonad.Layout.Minimize
 import XMonad.Layout.Groups.Helpers
 import XMonad.Layout.NoBorders
 import qualified XMonad.Layout.Groups as G
@@ -66,6 +65,7 @@ import XMonad.Hooks.ManageDocks
 import qualified XMonad.Hooks.UrgencyHook as U
 import XMonad.Vim.InsertPosition
 import XMonad.Vim.InsertOlder
+import XMonad.Vim.Minimize
 import XMonad.Vim.Prompt.Calc
 import XMonad.Vim.Prompt.Vimb
 import XMonad.Vim.Prompt.Dict
@@ -85,9 +85,6 @@ import XMonad.Vim.TaskGroup
 import XMonad.Vim.QuickFind
 import XMonad.Vim.Repeat
 import XMonad.Vim.Macro
-
--- debug
-logger s = spawn $ "echo \"`date`: \"" ++ escapeQuery s ++ " >> ~/.xmonad/xmonad.log"
 
 vimXPKeymap = emacsLikeXPKeymap' (\c -> not (isAlphaNum c) && c /= '_')
 selectIcon' = [[1,1,1,1,1,1,1,1,1,1],
@@ -350,19 +347,33 @@ printGStack cs tgs = do
             _ -> return $ Just "" 
 
 printRegs (VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor _ _) tgs = do
-    ls <- fmap reverse getCurrentMinimizedWindows
-    -- we first check for all the tags they have
-    regs <- fmap (reverse . sortRegs . S.toList . S.fromList . concat) $ mapM getTags ls
+    mf <- gets (W.peek . windowset)
+    als <- allOrderedWindows
+    altags <- mapM getTags als
+    mwins <- getMinimizedWindows
+    let ls = filter (not . null . snd) $ zip als altags
+        (wins, _) = unzip ls
+        regs = sortRegs $ S.toList $ S.fromList $ concat $ fmap snd ls
+        unrefed = filter (not . (`elem` wins)) mwins
+    rwins <- mapM (\r -> filterM (hasTag r) wins) regs
     -- now for each tag we scan through the list to get all the windows
-    let pinfo = infoFromTaggedGStack' True (repeat "") ("","") (repeat $ repeat ("","")) (myNotifyColor, "/") (repeat (myFgColor, myFgColor)) myBgColor
-        toTg l = taggedGStack tgs (G.fromZipper (W.differentiate $ reverse l) 1) 
-        prinfo (r, info) = "'"++r++":"++info
-    rwins <- mapM (\r -> filterM (hasTag r) ls) $ regs
-    starwins <- filterM (fmap null . getTags) ls
-    let pairs = (if not (null starwins) then [("*", starwins)] else [])++zip regs rwins
+    let pairs = zip regs rwins ++ (if not (null unrefed) then [("*", unrefed)] else [])
         (rls, winls) = unzip pairs
-    tgs <- mapM toTg winls
-    return $ Just $ joinStr "|" $ fmap prinfo $ zip rls (fmap pinfo tgs) 
+        pinfo' c = infoFromTaggedGStack' True (repeat "") ("","") (repeat $ repeat ("","")) (c, "/") (repeat (myFgColor, myFgColor)) myBgColor
+        toTg' l = taggedGStack tgs (G.fromZipper (W.differentiate $ reverse l) 1) 
+        toTg (vls, hls) = do
+            vtg <- toTg' vls
+            htg <- toTg' hls
+            let vc = case mf of
+                        Just f | f `elem` vls -> myTextHLight
+                        _ -> myFgColor
+            return (pinfo' vc vtg, pinfo' myNotifyColor htg)
+        prinfo (r, (vinfo, hinfo)) = "'"++r++":"++jvh vinfo hinfo
+        jvh [] b = b
+        jvh a [] = a
+        jvh a b = a ++ "-" ++ b
+    tgs <- mapM toTg $ fmap (partition (not . (`elem` mwins))) winls
+    return $ Just $ joinStr "|" $ fmap prinfo $ zip rls tgs 
 
 ----------- hooks
 
@@ -428,7 +439,7 @@ columnKeys = zip (fmap wrapList columngroupSymbolSequence) [0..]
 extendedColumnKeys = zip (fmap charToKeyStroke $ extendedSequence columngroupSymbolSequence) [length columnKeys..]
 feedReg k fun = fmap Just $ fun k
 wrapInclude = fmap (\a -> (a, True))
-getCurrentMinimizedWindowsWithoutRegs = getCurrentMinimizedWindows >>= filterM (fmap null . getTags)
+getMinimizedWindowsWithoutRegs = getMinimizedWindows >>= filterM (fmap null . getTags)
 
 hasTagQuery s = ask >>= \w -> liftX $ hasTag s w
 targetForReg r d = wrapAroundWindowsMatchingPredicate d (fmap not isFocused <&&> hasTagQuery r) >>= return . wrapInclude . listToMaybe
@@ -448,8 +459,8 @@ regReadonlyKeys = [ (charToKeyStroke '\''
                   , (charToKeyStroke '*'
                     , feedReg "*"
                     , False
-                    , \_ d -> fmap (wrapInclude . listToMaybe . if d == Prev then reverse else id) getCurrentMinimizedWindowsWithoutRegs
-                    , \_ -> getCurrentMinimizedWindowsWithoutRegs)]
+                    , \_ d -> fmap (wrapInclude . listToMaybe . if d == Prev then reverse else id) getMinimizedWindowsWithoutRegs
+                    , \_ -> getMinimizedWindowsWithoutRegs)]
 regUnnamedKey = (""
                 , feedReg ""
                 , False
@@ -651,7 +662,7 @@ motionKeys xpc tgs =
     -- group toggling
     [ ("g "++filterKey g, "M-"++px++"g "++filterKey g, do
             -- the cycling and toggling would require different techniques
-            let move dir = wrapAroundWindowsMatchingPredicate (if dir == d then Next else Prev) (fmap not isFocused <&&> localFirstFilterPredicate g) 
+            let move dir = wrapAroundWindowsMatchingPredicate (if dir == d then Next else Prev) (fmap not isFocused <&&> localFirstFilterPredicate g <&&> fmap not isMinimized) 
                             >>= return . fmap (\a->(a,True)) . listToMaybe
             t <- move Next
             wins <- orderedWindowsMatchingPredicate ((filterPredicate g) <&&> isInCurrentWorkspace)
@@ -749,73 +760,59 @@ wssKeys =
 cutCommands xpc tgs = concatMap (processKey . addPrefix) $
     [ (regk++dc, da)
     | (regk, ta, add, _, _) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys' xpc "Cut windows to register: " "Add windows to register: ")
+    , (pk, cutcmd) <- [("d", delete), ("m", cut)]
+    , cmd <- [\ls -> ta $ \t -> cutcmd add t ls]
     , (dc, da) <- -- deletion
-                  [ (fk, do
-                        ls <- xls
-                        ta $ \t -> cutcmd add t ls
-                        refresh)
-                  | (fk, xls, cutcmd) <- [ (pk++" "++mk, xls', cutcmd')
-                                         | (pk, cutcmd') <- [("d", delete), ("m", cut)]
-                                         , (mk, xls') <- motionKeyWindowSelection xpc tgs
-                                                        ++
-                                                        structKeys pk]
-                                         ++
-                                         [ (pk, windowSelectionForMotionKey "S-4" xpc tgs, cutcmd')
-                                         | (pk, cutcmd') <- [("S-d", delete), ("S-m", cut)] ]
-                                 -- ++
-                                 -- [ ("S-q", groupList 1) ]
-                                 -- ++
-                                 -- [ ("C-q", columnList 1) ]
+                  [ (fk, xls >>= cmd >> refresh)
+                  | (fk, xls) <- [ (pk++" "++mk, xls')
+                                 | (mk, xls') <- motionKeyWindowSelection xpc tgs
+                                                 ++
+                                                 structKeys pk]
+                                 ++
+                                 [ ("S-"++pk, windowSelectionForMotionKey "S-4" xpc tgs) ]
                   ]
                   ++
-                  [ (pk++"x", onSelectedWindows $ \wins -> ta (\t -> cutcmd add t wins) >> refresh)
-                  | (pk, cutcmd) <- [("", delete), ("S-", cut) ]
+                  [ (pk++" "++nk++"s", do
+                        wst <- workspaceStack
+                        let ls = case wst of
+                                    Just (W.Stack f _ d) -> [f]++d
+                                    _ -> []
+                        removeWorkspaces cmd $ fmap W.tag $ take n ls)
+                  | (nk, n) <- numberKeys
                   ]
                   ++
-                  [ (fks, do
-                      -- ta $ \t -> sequence_ $ take n $ repeat $ removeCurrentWorkspace' t
-                      wst <- workspaceStack
-                      let ls = case wst of
-                                  Just (W.Stack f _ d) -> [f]++d
-                                  _ -> []
-                      removeWorkspaces $ fmap W.tag $ take n ls)
-                  | (fks, n) <- [ (pk++" "++nk++"s", n')
-                                | (nk, n') <- numberKeys
-                                , pk <- ["d"{- , "m" -}] ]
-                                -- ++
-                                -- [ ("C-S-q", 1) ]
+                  [ (pk++" M-"++t, removeWorkspaces cmd [t])
+                  | t <- quickWorkspaceTags]
+                  -- the find motion for workspaces
+                  ++
+                  [ (pk++" "++mk++"M-"++ch, do
+                      ts <- allWorkspaceTags
+                      curr <- gets (W.currentTag . windowset)
+                      -- first we should try to locate the indices
+                      case (elemIndex curr ts, ati ts) of
+                           (Just ci, Just ti) | ci < ti -> removeWorkspaces cmd $ drop ci $ take (ti+1) ts
+                                              | ci == ti -> if useSingleCurrent then removeWorkspaces cmd $ [ts !! ci] else return ()
+                                              | otherwise -> removeWorkspaces cmd $ drop ti $ take ci ts
+                           _ -> return ())
+                  | (mk, ch, ati, useSingleCurrent) <- 
+                                     [ ("f ", charToKeyStroke t, elemIndex [t], False) | t <- symbolSequence]
+                                     ++
+                                     [ ("", "0", \_ -> Just 0, False), ("", "S-4", \ts -> Just $ length ts - 1, True) ]
                   ]
-    ]
-    ++
-    [ ("d M-"++t, removeWorkspace t)
-    | t <- quickWorkspaceTags]
-    -- the find motion for workspaces
-    ++
-    [ ("d "++mk++"M-"++ch, do
-        ts <- allWorkspaceTags
-        curr <- gets (W.currentTag . windowset)
-        -- first we should try to locate the indices
-        case (elemIndex curr ts, ati ts) of
-             (Just ci, Just ti) | ci < ti -> removeWorkspaces $ drop ci $ take (ti+1) ts
-                                | ci == ti -> if useSingleCurrent then removeWorkspaces $ [ts !! ci] else return ()
-                                | otherwise -> removeWorkspaces $ drop ti $ take ci ts
-             _ -> return ())
-    | (mk, ch, ati, useSingleCurrent) <- 
-                       [ ("f ", charToKeyStroke t, elemIndex [t], False) | t <- symbolSequence]
-                       ++
-                       [ ("", "0", \_ -> Just 0, False), ("", "S-4", \ts -> Just $ length ts - 1, True) ]
-    ]
-    -- the [ and ] motion
-    ++
-    [ ("d "++nk++dk, do
-            wst <- workspaceStack
-            let ls = case wst of
-                         Just (W.Stack f u d) | dir == Prev -> if null u then [] else [f]++u
-                                              | otherwise -> if null d then [] else [f]++d
-                         _ -> []
-            removeWorkspaces $ fmap W.tag $ take (n+1) ls)
-    | (nk, n) <- numberKeys
-    , (dk, dir) <- [("[", Prev), ("]", Next)]
+                  -- the [ and ] motion
+                  ++
+                  [ (pk++" "++nk++dk, do
+                          wst <- workspaceStack
+                          let ls = case wst of
+                                       Just (W.Stack f u d) | dir == Prev -> if null u then [] else [f]++u
+                                                            | otherwise -> if null d then [] else [f]++d
+                                       _ -> []
+                          removeWorkspaces cmd $ fmap W.tag $ take (n+1) ls)
+                  | (nk, n) <- numberKeys
+                  , (dk, dir) <- [("[", Prev), ("]", Next)]
+                  ]
+                  ++
+                  [ ((if pk == "d" then "" else "S-")++"x", onSelectedWindows cmd >> refresh) ]
     ]
 
 yankCommands xpc tgs = concatMap (processKey . addPrefix) $
@@ -949,12 +946,10 @@ changeCommands modKey xpc tgs = concatMap (processKey . addPrefix) $
     ]
 
 pasteCommands xpc = concatMap (processKey . addPrefix)
-    [ (regk++cmd, ta (paste i np xls) >> return ())
-    | (cmd, i, np) <- [("p", False, True)
-                      -- , ("S-p", False, False)
-                      , ("g p", True, True)
-                      -- , ("g S-p", True, False)
-                      ]
+    [ (regk++cmd, ta (paste i xls) >> return ())
+    | (cmd, i) <- [("p", False)
+                  , ("g p", True)
+                  ]
     , (regk, ta, _, _, xls) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys xpc "Paste windows from register: " ++ regReadonlyKeys)
     ]
 visualCommands = 
@@ -1190,9 +1185,11 @@ macroRemapCommands keybindings tgs =
                       ]
     ]
 
-paste invertInsert normalP xls register = do
+------- registers
+
+paste invertInsert xls register = do
     InsertOlderToggle t <- XS.get
-    ws <- case register of 
+    wins <- case register of 
                  -- use the default register
                  "" -> do
                      -- first get the register content
@@ -1206,23 +1203,20 @@ paste invertInsert normalP xls register = do
                              _ -> mvWindows (show $ (read t)-1) mv rep
                      mvWindows "9" mv []
                  _ -> xls register
-    -- here's the tricky part about this: when we order windows, we prioritise the more recently minimized windows; however, when we paste windows from registers, we need to reverse that such that the old windows come first
-    let wins = reverse ws
     if not (null wins)
        then do
             markWindowsSelection wins
-            let t' = if invertInsert then not t else t
-            case (t', normalP) of
+            case (if invertInsert then not t else t) of
                  -- focus the last window (as in vim which places cursor on the last element)
-                 (False, True) -> shiftWindowsHereAndFocusLast True (Just (last wins)) wins
-                 (False, False) -> shiftWindowsHereAndFocusLast False (Just (last wins)) wins
-                 (True, True) -> shiftWindowsHereAndFocusLast True Nothing wins
-                 (True, False) -> shiftWindowsHereAndFocusLast False Nothing wins
+                 False -> shiftWindowsHereAndFocusLast (Just (last wins)) wins
+                 True -> shiftWindowsHereAndFocusLast Nothing wins
        else return ()
 
 cut add register ls = flip correctFocus ls $ \wins -> do
                         deleteWindowsSelection wins
-                        mapM_ minimizeWindow wins
+                        -- we only minimize the windows if they are NOT already minimized
+                        mwins <- getMinimizedWindows
+                        minimizeWindows $ filter (not . (`elem` mwins)) wins
                         if register /= ""
                            then do
                                -- clensing the tags for these windows (when we move/cut windows into a register, we'd expect the original tag lost)
@@ -1287,7 +1281,7 @@ myAppendableKeys m xpc t additionalKeys toggleFadeSet =
            )
        )
 
-type VimLayout = ModifiedLayout Minimize (ModifiedLayout WithBorder (ModifiedLayout AvoidStruts (ModifiedLayout (ConfigurableBorder Ambiguity) (G.Groups (G.Groups (ModifiedLayout Rename (ModifiedLayout (Decoration TabbedDecoration DefaultShrinker) Simplest)) (Choose (Mirror (ZoomRow GroupEQ)) Full)) (Choose (ZoomRow GroupEQ) Full)))))
+type VimLayout = ModifiedLayout WithBorder (ModifiedLayout AvoidStruts (ModifiedLayout (ConfigurableBorder Ambiguity) (G.Groups (G.Groups (ModifiedLayout Rename (ModifiedLayout (Decoration TabbedDecoration DefaultShrinker) Simplest)) (Choose (Mirror (ZoomRow GroupEQ)) Full)) (Choose (ZoomRow GroupEQ) Full))))
 
 viminize :: Theme -> (HistoryMatches -> XPConfig) -> VimStatusTheme -> Handle -> [TaskGroup] -> [(String, X ())] -> (XConfig l1) -> IO (XConfig VimLayout)
 viminize tabTheme xpc colors statusLogHandle tgs additionalKeys config = do
@@ -1302,7 +1296,7 @@ viminize tabTheme xpc colors statusLogHandle tgs additionalKeys config = do
                 , manageHook = composeAll [vimManageHook tgs, manageHook config]
                 , handleEventHook = (handleEventHook config) <+> (vimHandleEventHook m)
                 , startupHook = startupHook config >> vimStartupHook
-                , layoutHook = minimize . noBorders . avoidStruts . lessBorders Screen $ vimLayout tabTheme tgs
+                , layoutHook = noBorders . avoidStruts . lessBorders Screen $ vimLayout tabTheme tgs
                 , terminal = myTerminal
                 , workspaces = [scratchpadWorkspaceTag, tmpWorkspaceTag]
            } `additionalKeysP` ((normalize keys) ++ macroCommands ++ macroRemapCommands keys tgs)

@@ -133,7 +133,7 @@ Some points to note:
 * `<tab>` means any tab label in the current *line*
 * `<row>` means any row label in the current workspace
 * `<workspace>` means any workspace label in the current X session
-* `<reg>` means a single character register; the character can be any that can be typed on the keyboard, however some of them are special
+* `<reg>` means a single alpha-numeric character register
     * `/`: a special register that pops out a prompt for you to enter the exact arbitrary name for the register
     * `"`: the unnamed register used by [move](#move) and [paste](#paste)
         * as in vim, the unnamed register pushes content through registers `1` to `9`
@@ -214,8 +214,7 @@ Objects are used with commands, where the same command is applied to all the win
 
 * if `'<reg>` is given, minimize the windows selected by the `<motion/object>` and then attach them to register `<reg>`
 * else delete the windows selected by `<motion/object>`
-* when `<motion/object>` is workspace-wise, always perform deletion of the workspaces (workspaces do not have register support) 
-    * note: for the temporary workspace, `` ` ``, the windows inside will be deleted, but the workspace itself will always exist (to avoid the problem of erasing all workspaces)
+* note: when `<motion/object>` is workspace-wise, and the range includes the temporary workspace, `` ` ``, the windows inside `` ` `` will be deleted but the temporary workspace itself will always persist
 
 #### Move
 
@@ -372,14 +371,19 @@ For example, say I want to create a new workspace after the current one for rese
 
 The full syntax for the workspace prompt is:
 
-    s<space action>
+    s[<num>]<space action>
 
 where `<space action>` can be
 
 * `a`: create workspace after the current one (or switch to an existing workspace)
+* `<M-a>`: clone the current workspace after itself
+    * *clone* means copying the name and directory of a workspace
 * `i`: create workspace before the current one (or switch to an existing workspace)
+* `<M-i>`: clone the current workspace before itself
 * `A`: create workspace at the end of the workspace list (or switch to an existing workspace)
+* `<M-A>`: clone the current workspace at the end of the workspace list
 * `I`: create workspace at the beginning of the workspace list (or switch to an existing workspace)
+* `<M-I>`: clone the current workspace at the beginning of the workspace list
 * `C`: change the name of the current directory
 
 #### Dynamic Prompt

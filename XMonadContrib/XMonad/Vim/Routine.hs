@@ -14,11 +14,16 @@ module XMonad.Vim.Routine
     , unescape
     , processKey
     , addPrefix
+    , logger
     ) where
 
 import Data.Char
 import Data.List
 import Data.Maybe
+import XMonad
+import XMonad.Util.Run
+
+logger s = spawn $ "echo \"`date`: \"" ++ escapeQuery s ++ " >> ~/.xmonad/xmonad.log"
 
 compareLists _ [] [] = EQ
 compareLists _ [] _ = LT

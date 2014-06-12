@@ -135,13 +135,7 @@ scratchpads = [
 --      S-a -- used by cgA 
 --      / -- used by a{h,j,k,l}/
 taskGroups = 
-    let tgd = def { colorScheme = mySubTheme }
-        intellijTaskGroup = tgd { taskGroupName = "idea"
-                                , filterKey = "j"
-                                , filterPredicate = className =? "jetbrains-idea"
-                                , localFirst = False
-                                , construct = \n _ -> runShell "intellij-idea-ultimate-edition"
-                                } in
+    let tgd = def { colorScheme = mySubTheme } in
     [ -- vimb instances
       tgd { taskGroupName = "vimb"
           , filterKey = "b"
@@ -239,7 +233,12 @@ taskGroups =
           , construct = \n _ -> seqn n $ runTerm "canto" "canto" "loader canto"
           }
       -- intellij singleton
-    , intellijTaskGroup
+    -- , tgd { taskGroupName = "idea"
+    --       , filterKey = "j"
+    --       , filterPredicate = className =? "jetbrains-idea"
+    --       , localFirst = False
+    --       , construct = \n _ -> runShell "intellij-idea-ultimate-edition"
+    --       }
       -- gimp singleton
     , tgd { taskGroupName = "gimp"
           , filterKey = "S-m"
@@ -255,13 +254,13 @@ taskGroups =
           }
       -- libreoffice (can have multiple documents)
     , tgd { taskGroupName = "libre"
-          , filterKey = "l"
+          , filterKey = ""
           , filterPredicate = fmap (isInfixOf "libreoffice") className
           , construct = \n _ -> seqn n $ runShell "libreoffice"
           }
       -- all remaining xterms can be matched in this group
     , tgd { taskGroupName = "term(...)"
-          , filterKey = "S-t"
+          , filterKey = ""
           , filterPredicate = isTerm
           , construct = \n _ -> seqn n $ runTerm "" "" "zsh -i"
           }
