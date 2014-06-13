@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link href='https://fonts.googleapis.com/css?family=Architects+Daughter' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
+
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+
+    <title>Vimonad by lynnard</title>
+  </head>
+
+  <body>
+    <header>
+      <div class="inner">
+        <h1>Vimonad</h1>
+        <h2>Bringing VIM philosophy into window management</h2>
+        <a href="https://github.com/lynnard/VIMonad" class="button"><small>View project on</small>GitHub</a>
+      </div>
+    </header>
+
+    <div id="content-wrapper">
+      <div class="inner clearfix">
+        <section id="main-content">
+          <h1>
+<a name="vimonad" class="anchor" href="#vimonad"><span class="octicon octicon-link"></span></a>VIMonad</h1>
+
+<p>VIMonad is a fork of XMonad that manages windows in a modal way like that in VIM. Some of the features include</p>
+
+<ul>
+<li>
+<a href="#layout">Split layout</a>: a 3-level nested layout that divides each workspace into a grid of rectangular areas each containing unlimited number of tabs (like <a href="http://notion.sourceforge.net/">Notion</a>, with added advantage of dynamic resizing)</li>
+<li>
+<a href="#motion">Motion</a>: navigating around windows, split panes, workspaces with countable motion keys</li>
+<li>
+<a href="#command">Command</a>: delete, yank windows with register + motion support</li>
+<li>
+<a href="#macro">Macro</a>: record and play macros</li>
+<li>
+<a href="#visual">Visual</a>: advanced visual mode support that allows selection of windows via motion keys</li>
+<li>
+<a href="#prompt">Prompt</a>: execute common actions via a variety of prompts that are capable of
+
+<ul>
+<li>dynamically displaying the response of an action (e.g., <code>find</code> and <code>grep</code>) as complete-able options (for selecting files)</li>
+<li>previewing files in the completion window</li>
+<li>providing application-specific completion window (e.g, <code>taskwarrior</code>)</li>
+</ul>
+</li>
+</ul><h2>
+<a name="acknowledgements" class="anchor" href="#acknowledgements"><span class="octicon octicon-link"></span></a>Acknowledgements</h2>
+
+<p>VIMonad is built upon XMonad and it borrows a lot of great modules already existing in its Contrib library. I'd like to thank all the people who have made XMonad a fantastic window manager in the first place.</p>
+
+<h2>
+<a name="install" class="anchor" href="#install"><span class="octicon octicon-link"></span></a>Install</h2>
+
+<h3>
+<a name="dependencies" class="anchor" href="#dependencies"><span class="octicon octicon-link"></span></a>Dependencies</h3>
+
+<ul>
+<li>
+<a href="http://www.haskell.org/cabal/">cabal</a>: for installing packages</li>
+<li>
+<a href="http://tomas.styblo.name/wmctrl/">wmctrl</a>: for activating windows from the command line</li>
+<li>
+<a href="http://github.com/lynnard/fmd">FMD</a> and <a href="http://github.com/lynnard/fmc" title="FMD radio client">FMC</a>: if you'd like to use the radio service in VIMonad</li>
+<li>
+<a href="http://taskwarrior.org/" title="Taskwarrior">taskwarrior</a>: task management from the prompt</li>
+<li>
+<a href="https://github.com/fanglingsu/vimb/" title="Vimb">vimb</a>: light-weight browser with its histories and bookmarks accessible from the prompt</li>
+<li>
+<a href="http://www.semicomplete.com/projects/xdotool/xdotool.xhtml">xdotool</a>: for playing back text macros</li>
+<li>
+<a href="http://nongnu.org/ranger/">ranger</a>: for deciding the program to launch files from <a href="#dynamic-prompt">Dynamic prompt</a>
+</li>
+<li>
+<a href="http://feh.finalrewind.org/">feh</a>: for changing wallpapers via <a href="#wallpaper-prompt">Wallpaper prompt</a>
+</li>
+</ul><h3>
+<a name="steps" class="anchor" href="#steps"><span class="octicon octicon-link"></span></a>Steps</h3>
+
+<ol>
+<li>clone the repo somewhere</li>
+<li>move all the scripts under <a href="bin">bin</a> to a directory included in <code>$PATH</code>
+</li>
+<li>copy files under <a href=".xmonad">.xmonad</a> to <code>~/.xmonad</code> (note your old xmonad configuration will be overriden)
+
+<ul>
+<li>
+<a href=".xmonad/xmonad.hs" title="VIMonad template configuration">.xmonad/xmonad.hs</a> serves as a template config file; modify it if you'd like</li>
+</ul>
+</li>
+<li>
+<code>cd</code> into <a href="xmonad">xmonad</a>; <code>cabal install</code>
+</li>
+<li>
+<code>cd</code> into <a href="XMonadContrib">XMonadContrib</a>; <code>cabal install</code>
+</li>
+</ol><h2>
+<a name="concepts" class="anchor" href="#concepts"><span class="octicon octicon-link"></span></a>Concepts</h2>
+
+<h3>
+<a name="layout" class="anchor" href="#layout"><span class="octicon octicon-link"></span></a>Layout</h3>
+
+<p><img src="images/layout.jpg" alt=""></p>
+
+<p>(Zoom in to see how the layout is represented on the statusbar)</p>
+
+<h4>
+<a name="hierarchy" class="anchor" href="#hierarchy"><span class="octicon octicon-link"></span></a>Hierarchy</h4>
+
+<pre><code>workspace(s)
+└── row(s)
+    └── line(s)
+        └── tab(s)
+</code></pre>
+
+<ul>
+<li>
+<strong>workspaces</strong>: the conventional sense of workspace as used in most window managers
+
+<ul>
+<li>the workspace labels are the symbols before <code>:&lt;name&gt;</code> </li>
+<li>the system starts up with only one workspace <code>`</code> (the temporary workspace)</li>
+<li>new workspaces are added dynamically via <a href="#workspace-prompt">prompt</a>; the aim is to organize workspaces by <strong>context</strong> (each workspace for one task)</li>
+<li>each workspace has its own <em>current directory</em>; this can be changed by <code>cd</code> in the <a href="#dynamic-prompt">DynamicPrompt</a>
+</li>
+</ul>
+</li>
+<li>
+<strong>rows</strong>: vertical columns each spanning the entire the height of the screen
+
+<ul>
+<li>each row has a label attached to it - the first row in the workspace gets <code>1</code>, the second gets <code>2</code>, so on and so forth; the entire <em>stream</em> of symbols used as labels can be found in the source</li>
+<li>row labels are displayed in the statusbar (before each group of square brackets)</li>
+</ul>
+</li>
+<li>
+<strong>lines</strong>: horizontal rectangular regions contained in <em>rows</em>, each holding an arbitrary number of tabs 
+
+<ul>
+<li>the lines don't have labels; however, you'll be able to reference lines using <code>[num]G</code> as in vim</li>
+</ul>
+</li>
+<li>
+<strong>tabs</strong>: as the ones seen in modern browsers; each tab is a window
+
+<ul>
+<li>the tab labels are shown near the leftmost edge of each tab</li>
+<li>each tab might have a different colorscheme according to the definition of the task group it belongs to e.g., in the image above, vim windows have a brownish tab color, whereas <a href="https://github.com/fanglingsu/vimb/" title="Vimb">vimb</a> windows have a green one</li>
+<li>tabs are only shown for lines with more than one window (due to a bug in the tabbed layout, currently it's not possible to show tabs at all time)</li>
+</ul>
+</li>
+<li>
+<strong>minimized</strong>: a special case is that windows can be minimized in each workspace
+
+<ul>
+<li>this happens when the window is deleted into a specified register (see <a href="#delete">delete</a>)</li>
+<li>or the window is moved (into the unnamed or specified register) (see <a href="#move">move</a>)</li>
+<li>the minimized windows are shown in the statusbar with <code>|</code> between them and labelled with the names of the registers they belong to</li>
+</ul>
+</li>
+</ul><h4>
+<a name="resizing" class="anchor" href="#resizing"><span class="octicon octicon-link"></span></a>Resizing</h4>
+
+<ul>
+<li>
+<code>M-&lt;</code>: shrink current row</li>
+<li>
+<code>M-&gt;</code>: expand current row</li>
+<li>
+<code>M-\</code>: restore default size for the current row</li>
+<li>
+<code>M--</code>: shrink current line</li>
+<li>
+<code>M-+</code>: expand current line</li>
+<li>
+<code>M-=</code>: restore default size for the current line</li>
+</ul><h3>
+<a name="task-group" class="anchor" href="#task-group"><span class="octicon octicon-link"></span></a>Task group</h3>
+
+<p>A major concept of VIMonad is task group. A task group defines a groups of windows that share the same or similar characteristics e.g., vim terminal windows, browser windows, etc.</p>
+
+<p>Each task group has</p>
+
+<ul>
+<li>a <code>filterKey</code> to be referenced in motions. This can be a single key or a sequence of keys.</li>
+<li>a construction function that constructs a new instance of the group. </li>
+<li>a list of <code>manageHooks</code> that define the <a href="#window-style">window styles</a> that you can cycle using <code>M-t</code> and <code>M-S-t</code>
+</li>
+</ul><p>Checkout <a href=".xmonad/xmonad.hs" title="VIMonad template configuration">xmonad.hs</a> for how to define task groups.</p>
+
+<p>Checkout <a href="XMonadContrib/XMonad/Vim/TaskGroup.hs">Taskgroup.hs</a> for source about task groups.</p>
+
+<h3>
+<a name="register" class="anchor" href="#register"><span class="octicon octicon-link"></span></a>Register</h3>
+
+<p>Registers server two purposes in VIMonad:</p>
+
+<ol>
+<li>they act as <em>marks</em> attached to windows, by referencing which we can cycle within a specific group of windows</li>
+<li>they also act as <em>registers</em> like those in vim - we can delete, move, yank windows into registers
+
+<ul>
+<li>when we delete or move windows into registers, they are actually minimized as mentioned before</li>
+<li>when we yank windows into registers, the windows stay in their original places</li>
+</ul>
+</li>
+</ol><p>Attached registers are displayed for each window within the sqaure brackets of its tab label as <code>'&lt;reg&gt;['&lt;another reg&gt;]</code>.</p>
+
+<h3>
+<a name="insertion" class="anchor" href="#insertion"><span class="octicon octicon-link"></span></a>Insertion</h3>
+
+<p>Insertion of windows/workspaces emulate the relevant aspects from vim</p>
+
+<ul>
+<li>
+<code>a</code>: insert after the current window/workspace</li>
+<li>
+<code>i</code>: insert before the current window/workspace</li>
+<li>
+<code>A</code>: insert at the end of the line/workspaces</li>
+<li>
+<code>I</code>: insert at the beginning of the line/workspaces</li>
+</ul><h4>
+<a name="insertion-order" class="anchor" href="#insertion-order"><span class="octicon octicon-link"></span></a>Insertion order</h4>
+
+<p>When a window is inserted, you can choose to keep the focus on the old window without switching to the new window</p>
+
+<ul>
+<li>
+<code>M-C-x</code> toggles this behavior</li>
+<li>for some commands, an additional <code>g</code> <em>temporarily</em> toggles this behavior as well</li>
+</ul><h2>
+<a name="keys" class="anchor" href="#keys"><span class="octicon octicon-link"></span></a>Keys</h2>
+
+<p>Some points to note: </p>
+
+<ul>
+<li>to perform any key sequence mentioned below, you need to press the first character with the modMask defined by you, e.g., to trigger <code>g2w</code> (move down 2 windows), press <code>M-g</code> followed by <code>2</code> and <code>w</code>.
+
+<ul>
+<li>exceptions are keystrokes with a dash inside, e.g., <code>M1-&lt;tab&gt;</code>, for which you press the exact key combo</li>
+</ul>
+</li>
+<li>
+<code>{}</code> means the key inside is not needed when the motion is passed as an argument to a command</li>
+<li>
+<code>[]</code> means the key inside is optional</li>
+<li>
+<code>&lt;num&gt;</code> can be any number from 2 to 9</li>
+<li>
+<code>&lt;tab&gt;</code> means any tab label in the current <em>line</em>
+</li>
+<li>
+<code>&lt;row&gt;</code> means any row label in the current workspace</li>
+<li>
+<code>&lt;workspace&gt;</code> means any workspace label in the current X session</li>
+<li>
+<code>&lt;reg&gt;</code> means a single alpha-numeric character register
+
+<ul>
+<li>
+<code>/</code>: a special register that pops out a prompt for you to enter the exact arbitrary name for the register</li>
+<li>
+<code>"</code>: the unnamed register used by <a href="#move">move</a> and <a href="#paste">paste</a>
+
+<ul>
+<li>as in vim, the unnamed register pushes content through registers <code>1</code> to <code>9</code>
+</li>
+</ul>
+</li>
+<li>
+<code>*</code>: always references the minimized windows that aren't present in any other register</li>
+<li>
+<code>'</code>: always references the last visited window</li>
+<li>an uppercase letter register <em>appends</em> the content to its lowercase letter register; the lowercase register <em>replaces</em> its original content (like in vim)
+
+<ul>
+<li>e.g., <code>'Adw</code> deletes the window and <em>appends</em> it to register <code>a</code>, whereas <code>'adw</code> deletes the window and it then <em>replaces</em> the original content in register <code>a</code>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<code>&lt;group&gt;</code> means the <code>filterKey</code> of a task group in the current workspace
+
+<ul>
+<li>a special group is <code>c</code>, which is the task group of the <em>current window</em> </li>
+<li>so for example <code>gc</code> cycles to the next window for the current task group, <code>dgc</code> deletes all the windows in the current task group</li>
+</ul>
+</li>
+<li>
+<code>&lt;macro&gt;</code> means a single- or multi- character macro register; the characters can be any that can be typed on the keyboard, except
+
+<ul>
+<li>
+<code>/</code>: a special register that pops out a prompt for you to enter the exact name for the macro</li>
+</ul>
+</li>
+</ul><h3>
+<a name="motion" class="anchor" href="#motion"><span class="octicon octicon-link"></span></a>Motion</h3>
+
+<ul>
+<li>
+<code>f&lt;tab&gt;</code>: moves to the tab with label <code>&lt;tab&gt;</code>
+</li>
+<li>
+<code>&lt;M1-&lt;tab&gt;&gt;</code>: leaps to the given tab 
+
+<ul>
+<li>the difference between <em>leap</em> and <code>f</code> is that <em>leap</em> references the tab without travelling along any window</li>
+<li>when used as selection <em>leap</em> only selects the given specific tab</li>
+<li>when used for navigation under normal mode, <em>leap</em> allows you to leap to the last visited window/row/workspace if the argument selects the currently focused window/row/workspace</li>
+</ul>
+</li>
+<li>
+<code>f&lt;C-&lt;row&gt;&gt;</code>: moves to the given row</li>
+<li>
+<code>&lt;C-&lt;row&gt;&gt;</code>: leaps to the given row
+
+<ul>
+<li>when used as selection only selects the given specific row</li>
+</ul>
+</li>
+<li>
+<code>f&lt;M-&lt;workspace&gt;&gt;</code>: moves to the given workspace</li>
+<li>
+<code>M-&lt;workspace&gt;</code>: leaps to the given workspace
+
+<ul>
+<li>when used as selection only selects the given specific workspace</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]b</code>: to the <code>&lt;num&gt;</code>'th windows/tabs back</li>
+<li>
+<code>[{g}&lt;num&gt;]w</code>: to the <code>&lt;num&gt;</code>'th windows/tabs forward</li>
+<li>
+<code>{g}0</code>: to the beginning of the line</li>
+<li>
+<code>{g}$</code>: to the end of the line</li>
+<li>
+<code>{g}&lt;C-0&gt;</code>: to the first row</li>
+<li>
+<code>{g}&lt;C-$&gt;</code>: to the last row</li>
+<li>
+<code>{g}&lt;M-0&gt;</code>: to the first workspace</li>
+<li>
+<code>{g}&lt;M-$&gt;</code>: to the last workspace</li>
+<li>
+<code>gg</code>: go to the top line
+
+<ul>
+<li>when used as selection this performs line-wise selection i.e. from the current line to the first line</li>
+</ul>
+</li>
+<li>
+<code>{g}G</code>: go to the bottom line
+
+<ul>
+<li>when used as selection this performs line-wise selection</li>
+</ul>
+</li>
+<li>
+<code>{g}&lt;num&gt;G</code>: go to the <code>&lt;num&gt;</code>'th line
+
+<ul>
+<li>when used as selection this performs line-wise selection</li>
+</ul>
+</li>
+<li>
+<code>g&lt;group&gt;</code>: cycle to the next window in <code>&lt;group&gt;</code>
+
+<ul>
+<li>when used as selection this selects all windows in that group in the current workspace</li>
+</ul>
+</li>
+<li>
+<code>G&lt;group&gt;</code>: cycle to the previous window in <code>&lt;group&gt;</code>
+</li>
+<li>
+<code>{g}'&lt;reg&gt;</code>: cycle to the next window in the <code>&lt;reg&gt;</code>
+
+<ul>
+<li>when used as selection this selects all windows in that register</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]k</code>: to the <code>&lt;num&gt;</code>'th line up
+
+<ul>
+<li>when used as selection this performs line-wise selection</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]j</code>: to the <code>&lt;num&gt;</code>'th line down
+
+<ul>
+<li>when used as selection this performs line-wise selection</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]h</code>: to the <code>&lt;num&gt;</code>'th row back
+
+<ul>
+<li>when used as selection this performs row-wise selection</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]l</code>: to the <code>&lt;num&gt;</code>'th row forward
+
+<ul>
+<li>when used as selection this performs row-wise selection</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;][</code>: to the <code>&lt;num&gt;</code>'th workspace back
+
+<ul>
+<li>when used as selection this performs workspace-wise selection</li>
+</ul>
+</li>
+<li>
+<code>[{g}&lt;num&gt;]]</code>: to the <code>&lt;num&gt;</code>'th workspace forward
+
+<ul>
+<li>when used as selection this performs workspace-wise selection</li>
+</ul>
+</li>
+<li>
+<code>;</code>: repeat the last <code>g&lt;group&gt;</code>, <code>G&lt;group&gt;</code>, <code>'&lt;tag&gt;</code> search motion</li>
+<li>
+<code>,</code>: reverse the last <code>g&lt;group&gt;</code>, <code>G&lt;group&gt;</code>, <code>'&lt;tag&gt;</code> search motion</li>
+</ul><h3>
+<a name="history-jumplist" class="anchor" href="#history-jumplist"><span class="octicon octicon-link"></span></a>History jumplist</h3>
+
+<ul>
+<li>
+<code>M-o</code>: move to the previous window in the jumplist</li>
+<li>
+<code>M-i</code>: move to the next window in the jumplist</li>
+</ul><h3>
+<a name="object" class="anchor" href="#object"><span class="octicon octicon-link"></span></a>Object</h3>
+
+<p>Objects are used with commands, where the same command is applied to all the windows contained in the object.</p>
+
+<ul>
+<li>
+<code>[&lt;num&gt;]&lt;command&gt;</code>: apply the command to <code>&lt;num&gt;</code> of lines starting from the current line
+
+<ul>
+<li>
+<code>&lt;command&gt;</code> means the same letter as the command, e.g., <code>dd</code> deletes the current line</li>
+</ul>
+</li>
+<li>
+<code>[&lt;num&gt;]r</code>: apply the command to <code>&lt;num&gt;</code> of rows starting from the current one</li>
+<li>
+<code>[&lt;num&gt;]s</code>: apply the command to <code>&lt;num&gt;</code> of workspaces starting from the current one</li>
+</ul><h3>
+<a name="command" class="anchor" href="#command"><span class="octicon octicon-link"></span></a>Command</h3>
+
+<h4>
+<a name="delete" class="anchor" href="#delete"><span class="octicon octicon-link"></span></a>Delete</h4>
+
+<pre><code>['&lt;reg&gt;]d&lt;motion/object&gt;
+</code></pre>
+
+<ul>
+<li>if <code>'&lt;reg&gt;</code> is given, minimize the windows selected by the <code>&lt;motion/object&gt;</code> and then attach them to register <code>&lt;reg&gt;</code>
+</li>
+<li>else delete the windows selected by <code>&lt;motion/object&gt;</code>
+</li>
+<li>note: when <code>&lt;motion/object&gt;</code> is workspace-wise, and the range includes the temporary workspace, <code>`</code>, the windows inside <code>`</code> will be deleted but the temporary workspace itself will always persist</li>
+</ul><h4>
+<a name="move" class="anchor" href="#move"><span class="octicon octicon-link"></span></a>Move</h4>
+
+<pre><code>['&lt;reg&gt;]m&lt;motion/object&gt;
+</code></pre>
+
+<p>Same as <a href="#delete">delete</a>, except</p>
+
+<ul>
+<li>when <code>'&lt;reg&gt;</code> is not given, minimize the windows into <code>"</code> register
+
+<ul>
+<li>push windows in registers <code>"12345678</code> one step forward to <code>123456789</code> and then forgetting the windows in register <code>9</code>
+</li>
+<li>the 'forgotten' windows are not deleted, they are just not referenced by any register anymore (except <code>*</code>)</li>
+</ul>
+</li>
+</ul><h4>
+<a name="yank" class="anchor" href="#yank"><span class="octicon octicon-link"></span></a>Yank</h4>
+
+<pre><code>'&lt;reg&gt;y&lt;motion/object&gt;
+</code></pre>
+
+<p>yank the windows selected by <code>&lt;motion/object&gt;</code> into register <code>&lt;reg&gt;</code></p>
+
+<ul>
+<li>workspace-wise <code>&lt;motion/object&gt;</code> are not supported</li>
+</ul><h4>
+<a name="paste" class="anchor" href="#paste"><span class="octicon octicon-link"></span></a>Paste</h4>
+
+<pre><code>['&lt;reg&gt;][g]p
+</code></pre>
+
+<p>paste the windows in register <code>&lt;reg&gt;</code></p>
+
+<ul>
+<li>if <code>g</code> is supplied, temporarily alter the current <a href="#insertion-order">insertion order</a>
+</li>
+<li>if <code>&lt;reg&gt;</code> is not supplied, paste windows in the unnamed register <code>"</code>
+</li>
+</ul><h4>
+<a name="change" class="anchor" href="#change"><span class="octicon octicon-link"></span></a>Change</h4>
+
+<pre><code>['&lt;reg&gt;]c&lt;motion/object&gt;&lt;group&gt;
+</code></pre>
+
+<p><a href="#delete">delete</a> the windows selected by <code>&lt;motion/object&gt;</code> into <code>&lt;reg&gt;</code> and replace them by a new window constructed for group <code>&lt;group&gt;</code></p>
+
+<ul>
+<li>here a special group is <code>/</code>, which brings up the <a href="#dynamic-prompt">DynamicPrompt</a> to launch arbitrary windows</li>
+</ul><h4>
+<a name="construct" class="anchor" href="#construct"><span class="octicon octicon-link"></span></a>Construct</h4>
+
+<pre><code>['&lt;reg&gt;]c[&lt;num&gt;][g]&lt;insert position&gt;&lt;group&gt;
+</code></pre>
+
+<p><a href="#delete">delete</a> the <a href="#visual">visually selected</a> windows into <code>&lt;reg&gt;</code> (only applicable within active visual mode), construct <code>&lt;num&gt;</code> of new window(s) for group <code>&lt;group&gt;</code> and insert it/them at the position specified by <code>&lt;insert position&gt;</code>, which can be:</p>
+
+<ul>
+<li>
+<code>a</code>: after the current window</li>
+<li>
+<code>i</code>: before the current window (the default behavior of XMonad)</li>
+<li>
+<code>A</code>: at the end of the line</li>
+<li>
+<code>I</code>: at the beginning of the line</li>
+<li>
+<code>C-j</code>: as a new line down</li>
+<li>
+<code>C-k</code>: as a new line up</li>
+<li>
+<code>C-h</code>: as a new row on the left</li>
+<li><p><code>C-l</code>: as a new row on the right</p></li>
+<li><p>similar to <a href="#change">change</a>, a special group is <code>/</code>, which brings up the <a href="#dynamic-prompt">DynamicPrompt</a> to launch arbitrary windows</p></li>
+<li>when <code>g</code> is supplied, temporarily alter the current <a href="#insertion-order">insertion order</a>
+</li>
+</ul><h4>
+<a name="unregister" class="anchor" href="#unregister"><span class="octicon octicon-link"></span></a>Unregister</h4>
+
+<pre><code>u&lt;motion/object&gt;
+</code></pre>
+
+<p>remove the association between the windows selected by <code>&lt;motion/object&gt;</code> with any registers</p>
+
+<h4>
+<a name="repeat" class="anchor" href="#repeat"><span class="octicon octicon-link"></span></a>Repeat</h4>
+
+<pre><code>.
+</code></pre>
+
+<p>repeat the last command</p>
+
+<h3>
+<a name="window-style" class="anchor" href="#window-style"><span class="octicon octicon-link"></span></a>Window style</h3>
+
+<p>Window style is a convenient way to configure the commonly used positions and dimensions for float windows.</p>
+
+<p>For each type of window (as defined by the task group), you have the opportunity to define the list of float styles.</p>
+
+<p>Note you would almost certainly want to include <code>doSink</code> in the list so that one of the styles is sinking the window back into the tiles.</p>
+
+<ul>
+<li>
+<code>M-t</code>: cycle forward in the style list for the current window</li>
+<li>
+<code>M-S-t</code>: cycle backward in the style list for the current window</li>
+</ul><h3>
+<a name="macro" class="anchor" href="#macro"><span class="octicon octicon-link"></span></a>Macro</h3>
+
+<p>Macros are by default stored under <code>~/.macros</code>. There are two types of macros</p>
+
+<ol>
+<li>a saved list of key sequences in VIMonad; these can be recorded directly in VIMonad</li>
+<li>an arbitrary piece of text; when triggered it is typed into the focused window via <code>xdotool</code>, like a snippet</li>
+</ol><h4>
+<a name="actions" class="anchor" href="#actions"><span class="octicon octicon-link"></span></a>Actions</h4>
+
+<ul>
+<li>
+<code>q&lt;macro&gt;</code>: start recording the ensuing key sequences into <code>&lt;macro&gt;</code>
+
+<ul>
+<li>when recording the statusbar will show a <code>●</code> followed by the name of the macro</li>
+</ul>
+</li>
+<li>
+<code>q&lt;Esc&gt;</code>: stop recording</li>
+<li>
+<code>a&lt;macro&gt;</code>: play the macro stored in <code>&lt;macro&gt;</code>
+</li>
+</ul><h3>
+<a name="visual" class="anchor" href="#visual"><span class="octicon octicon-link"></span></a>Visual</h3>
+
+<p>Similar to vim, VIMonad allows you to visually select windows. There is, however, an added subtlety about <em>passive/active</em> visual.</p>
+
+<h4>
+<a name="passive-visual" class="anchor" href="#passive-visual"><span class="octicon octicon-link"></span></a>Passive visual</h4>
+
+<p><img src="images/passive.jpg" alt=""></p>
+
+<p>Passive visual is indicated by a small triangle on the right edge of the selected tab. It stays on unless <code>M-&lt;Esc&gt;</code> is pressed.</p>
+
+<p>Passive visual is useful for chaining <a href="#visual-command">commands</a> - you can for example, move the selected windows into the left adjacent row and continue moving them up/down different lines.</p>
+
+<h4>
+<a name="active-visual" class="anchor" href="#active-visual"><span class="octicon octicon-link"></span></a>Active visual</h4>
+
+<p><img src="images/visual.jpg" alt=""></p>
+
+<p>Active visual is indicated by a small square on the right edge of the selected tab. This is more like the visual mode in vim.</p>
+
+<p>You can enter the active visual mode by</p>
+
+<ul>
+<li>
+<code>M-v</code>: visually select the current window and enter window-wise selection mode</li>
+<li>
+<code>M-S-v</code>: visually select the current line and enter line-wise selection mode</li>
+<li>
+<code>M-C-v</code>: visually select the current row and enter row-wise selection mode</li>
+</ul><p>In the active visual mode you can perform any <a href="#motion">motion</a> to toggle the selection of windows in the respective range.</p>
+
+<p>To quit the active visual mode, press <code>M-&lt;Esc&gt;</code>; this commits the selected windows to <em>passive visual</em> (press <code>M-&lt;Esc&gt;</code> again to remove passive visual).</p>
+
+<h4>
+<a name="visual-command" class="anchor" href="#visual-command"><span class="octicon octicon-link"></span></a>Visual command</h4>
+
+<p>These commands operate on</p>
+
+<ol>
+<li>when inside active visual mode, any windows currently selected</li>
+<li>or window(s) with passive visual in the current line, if any</li>
+<li><p>or the currently focused window</p></li>
+</ol><ul>
+<li>
+<code>['&lt;reg&gt;]x</code>: <a href="#delete">delete</a> counterpart for selection</li>
+<li>
+<code>['&lt;reg&gt;]X</code>: <a href="#move">move</a> counterpart for selection</li>
+<li>
+<code>y&lt;reg&gt;</code>: <a href="#yank">yank</a> counterpart for selection</li>
+<li>
+<code>M-S-u</code>: <a href="#unregister">unregister</a> counterpart for selection</li>
+<li>
+<code>M-S-j</code>: move the selected windows down a line</li>
+<li>
+<code>M-S-k</code>: move the selected windows up a line</li>
+<li>
+<code>M-S-h</code>: move the selected windows left a row</li>
+<li>
+<code>M-S-l</code>: move the selected windows right a row</li>
+<li>
+<code>M-C-j</code>: move the selected windows to a new line down</li>
+<li>
+<code>M-C-k</code>: move the selected windows to a new line up</li>
+<li>
+<code>M-C-h</code>: move the selected windows to a new row left</li>
+<li>
+<code>M-C-l</code>: move the selected windows to a new row right</li>
+</ul><h3>
+<a name="other-useful-keys" class="anchor" href="#other-useful-keys"><span class="octicon octicon-link"></span></a>Other useful keys</h3>
+
+<ul>
+<li>
+<code>[g&lt;num&gt;]W</code>: swap the current window <code>&lt;num&gt;</code> of times down the line</li>
+<li>
+<code>[g&lt;num&gt;]B</code>: swap the current window <code>&lt;num&gt;</code> of times up the line</li>
+<li>
+<code>[g&lt;num&gt;]&lt;S-C-j&gt;</code>: swap the current line <code>&lt;num&gt;</code> of times down</li>
+<li>
+<code>[g&lt;num&gt;]&lt;S-C-k&gt;</code>: swap the current line <code>&lt;num&gt;</code> of times up</li>
+<li>
+<code>[g&lt;num&gt;]&lt;S-C-h&gt;</code>: swap the current row <code>&lt;num&gt;</code> of times left</li>
+<li>
+<code>[g&lt;num&gt;]&lt;S-C-l&gt;</code>: swap the current row <code>&lt;num&gt;</code> of times right</li>
+<li>
+<code>[g&lt;num&gt;]}</code>: shift the current window to the workspace <code>&lt;num&gt;</code> of distance down</li>
+<li>
+<code>[g&lt;num&gt;]{</code>: shift the current window to the workspace <code>&lt;num&gt;</code> of distance up</li>
+<li>
+<code>[g&lt;num&gt;]&lt;C-]&gt;</code>: swap the current workspace <code>&lt;num&gt;</code> of times down</li>
+<li>
+<code>[g&lt;num&gt;]&lt;C-[&gt;</code>: swap the current workspace <code>&lt;num&gt;</code> of times up</li>
+<li>
+<code>&lt;M1-S-&lt;tab&gt;&gt;</code>: insert the current window at <code>&lt;tab&gt;</code>
+</li>
+<li>
+<code>&lt;C-S-&lt;row&gt;&gt;</code>: shift the current window to <code>&lt;row&gt;</code>
+</li>
+<li>
+<code>&lt;M-S-&lt;workspace&gt;&gt;</code>: shift the current window to <code>&lt;workspace&gt;</code>
+</li>
+<li>
+<code>&lt;M-6&gt;</code>: switch to the last visited workspace</li>
+<li>
+<code>&lt;M-S-6&gt;</code>: shift the current window to the last visited workspace</li>
+<li>
+<code>&lt;M-C-6&gt;</code>: swap the current workspace with the last visited workspace</li>
+<li>
+<code>M-&lt;Space&gt;</code>: toggle <code>Full</code> layout for the current row (maximize the focused window in the current row)</li>
+<li>
+<code>M-S-&lt;Space&gt;</code>: toggle <code>Full</code> layout for the current workspace (maximize the current row in the workspace)</li>
+</ul><h3>
+<a name="prompt" class="anchor" href="#prompt"><span class="octicon octicon-link"></span></a>Prompt</h3>
+
+<h4>
+<a name="workspace-prompt" class="anchor" href="#workspace-prompt"><span class="octicon octicon-link"></span></a>Workspace Prompt</h4>
+
+<p>As mentioned before, each workspace in VIMonad is dynamically allocated, and linked to a directory when being created. This is achieved via the workspace prompt - the prompt allows you to search in a <em>tag database</em> composed of directories with their names as tags (by default under <code>~/DB</code>), and select/create the directory for initializing the workspace.</p>
+
+<p>For example, say I want to create a new workspace after the current one for research on <code>VIMonad</code>, I can</p>
+
+<ol>
+<li>press <code>M-s a</code> (mnemonic: <em>space</em> create <em>after</em>), and enter in the prompt <code>VIMonad</code>
+</li>
+<li>if this <em>tag</em> already exists, I can see the directory in the completion window and choose it to have a new workspace rooted on that</li>
+<li>if it doesn't, I can instead input something like <code>indie/VIMonad</code> to create a new <em>tag</em> inside <code>indie</code> and root the new workspace in that new directory</li>
+<li>on the other hand I can also choose to not select any <em>tag</em> and just stick with <code>VIMonad</code> in the prompt; this gives me a new workspace rooted on home directory</li>
+<li>for 2 and 3 the new workspace will have an abbreviated version of the tag name as its workspace name; for 4 it will be whatever text you've put into the prompt</li>
+</ol><p>The full syntax for the workspace prompt is:</p>
+
+<pre><code>s[&lt;num&gt;]&lt;space action&gt;
+</code></pre>
+
+<p>where <code>&lt;space action&gt;</code> can be</p>
+
+<ul>
+<li>
+<code>a</code>: create workspace after the current one (or switch to an existing workspace)</li>
+<li>
+<code>&lt;M-a&gt;</code>: clone the current workspace after itself
+
+<ul>
+<li>
+<em>clone</em> means copying the name and directory of a workspace</li>
+</ul>
+</li>
+<li>
+<code>i</code>: create workspace before the current one (or switch to an existing workspace)</li>
+<li>
+<code>&lt;M-i&gt;</code>: clone the current workspace before itself</li>
+<li>
+<code>A</code>: create workspace at the end of the workspace list (or switch to an existing workspace)</li>
+<li>
+<code>&lt;M-A&gt;</code>: clone the current workspace at the end of the workspace list</li>
+<li>
+<code>I</code>: create workspace at the beginning of the workspace list (or switch to an existing workspace)</li>
+<li>
+<code>&lt;M-I&gt;</code>: clone the current workspace at the beginning of the workspace list</li>
+<li>
+<code>C</code>: change the name of the current directory</li>
+</ul><h4>
+<a name="dynamic-prompt" class="anchor" href="#dynamic-prompt"><span class="octicon octicon-link"></span></a>Dynamic Prompt</h4>
+
+<p>Dynamic prompt is an integral part of VIMonad as it handles almost all <em>program-related</em> aspects of the system. Instead of being a simple program launcher like <em>dmenu</em>, dynamic prompt is more like a full-fledged <em>shell</em> environment.</p>
+
+<p>Dynamic prompt is activated via <code>M-r</code>.</p>
+
+<p>You can</p>
+
+<ul>
+<li>execute arbitrary shell commands, with full shell completion support
+
+<ul>
+<li>if the program name is eliminated, it defaults to opening/launching the file using <code>rifle</code> from <code>ranger</code>
+</li>
+</ul>
+</li>
+<li>
+<p>preview files</p>
+
+<p><img src="images/dprompt_preview.png" alt=""></p>
+</li>
+<li>
+<p>search files dynamically with <em>search widgets</em></p>
+
+<p><img src="images/dprompt_search.png" alt=""></p>
+
+<ul>
+<li>
+<code>l</code> (locate): search for files recursively in a given directory (or the current one, if not specified) using <code>find</code>
+</li>
+<li>
+<code>t</code> (tag): search for a directory in the <em>tag database</em> using <em>find</em>
+</li>
+<li>
+<code>g</code> (grep): list all files containing the given words</li>
+<li>
+<code>h</code> (history): search for files launched in the past </li>
+</ul>
+</li>
+<li>
+<p>enter application-specific completion environment</p>
+
+<ul>
+<li>
+<p><code>git</code></p>
+
+<p><img src="images/dprompt_git.png" alt=""></p>
+</li>
+<li>
+<p><a href="http://taskwarrior.org/" title="Taskwarrior">task</a></p>
+
+<p><img src="images/dprompt_task.png" alt=""></p>
+</li>
+<li><p>dictionaries (using <code>sdcv</code>)</p></li>
+<li>calculator (using <code>calc</code>)</li>
+<li>
+<a href="https://github.com/fanglingsu/vimb/" title="Vimb">vimb</a> history and bookmarks</li>
+<li>
+<a href="http://github.com/lynnard/fmc" title="FMD radio client">FMC</a> radio service for douban.fm and jing.fm</li>
+</ul>
+</li>
+<li>execute shortcut commands, e.g.
+
+<ul>
+<li>
+<code>M-d</code>/<code>M-C-d</code>: cycle dictionaries forward/backwards</li>
+<li>
+<code>M-h</code>: reboot</li>
+<li>
+<code>M-b</code>: input <code>vb</code> in the prompt and enter <a href="https://github.com/fanglingsu/vimb/" title="Vimb">vimb</a> completion environment</li>
+<li>
+<code>M-k</code>: input <code>tk</code> in the prompt and enter <a href="http://taskwarrior.org/" title="Taskwarrior">task</a> completion environment</li>
+</ul>
+</li>
+</ul><h4>
+<a name="search-prompt" class="anchor" href="#search-prompt"><span class="octicon octicon-link"></span></a>Search prompt</h4>
+
+<p>Search windows by register/title/workspace name in the current X session</p>
+
+<ul>
+<li>
+<code>M-/</code>: search windows and navigate to the selected one</li>
+<li>
+<code>M-?</code>: search windows and bring the selected one to the current workspace</li>
+</ul><h4>
+<a name="wallpaper-prompt" class="anchor" href="#wallpaper-prompt"><span class="octicon octicon-link"></span></a>Wallpaper prompt</h4>
+
+<p>The wallpaper prompt enables you to switch wallpapers on the fly; it also has a <a href="https://github.com/sevensins/Wallbase-Downloader">wallbase backend</a> as well as a rss downloader backend (for flickr) for you to search and download wallpapers by tag/description.</p>
+
+<p>Wallpaper prompt is triggered by <code>M-z</code>. When the prompt is active, all the windows will be painted semi-transparent so that you can look through them to see the glory of the wallpapers.</p>
+
+<h2>
+<a name="disclaimer" class="anchor" href="#disclaimer"><span class="octicon octicon-link"></span></a>Disclaimer</h2>
+
+<p>I've put a lot of effort into VIMonad over the years, but there is no guarantee that it will work on your system. More specifically:</p>
+
+<ul>
+<li>I haven't got a chance to test it on any computer other than my own personal one</li>
+<li>VIMonad might cause slowdown (as compared to the vanilla XMonad)</li>
+</ul><p>If you intend to try VIMonad and have encountered any problem, you're welcome to use the <a href="https://github.com/lynnard/VIMonad/issues">issue tracker</a>.</p>
+        </section>
+
+        <aside id="sidebar">
+          <a href="https://github.com/lynnard/VIMonad/zipball/master" class="button">
+            <small>Download</small>
+            .zip file
+          </a>
+          <a href="https://github.com/lynnard/VIMonad/tarball/master" class="button">
+            <small>Download</small>
+            .tar.gz file
+          </a>
+
+          <p class="repo-owner"><a href="https://github.com/lynnard/VIMonad"></a> is maintained by <a href="https://github.com/lynnard">lynnard</a>.</p>
+
+          <p>This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the Architect theme by <a href="https://twitter.com/jasonlong">Jason Long</a>.</p>
+        </aside>
+      </div>
+    </div>
+
+  
+  </body>
+</html>
