@@ -91,7 +91,7 @@ Each task group has
 
 * a `filterKey` to be referenced in motions. This can be a single key or a sequence of keys.
 * a construction function that constructs a new instance of the group. 
-* a list of `manageHooks` that define the [window styles](window-style) that you can cycle using `M-t` and `M-S-t`
+* a list of `manageHooks` that define the [window styles](#window-style) that you can cycle using `M-t` and `M-S-t`
 
 Checkout [xmonad.hs][xmonad.hs] for how to define task groups.
 
