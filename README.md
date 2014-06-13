@@ -27,6 +27,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [vimb][vimb]: light-weight browser with its histories and bookmarks accessible from the prompt
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
 * [ranger](http://nongnu.org/ranger/): for deciding the program to launch files from [Dynamic prompt](#dynamic-prompt)
+* [feh](http://feh.finalrewind.org/): for changing wallpapers via [Wallpaper prompt](#wallpaper-prompt)
 
 ### Steps
 
@@ -86,9 +87,11 @@ workspace(s)
 
 A major concept of VIMonad is task group. A task group defines a groups of windows that share the same or similar characteristics e.g., vim terminal windows, browser windows, etc.
 
-Each task group might have a `filterKey` to be referenced in motions. This can be a single key or a sequence of keys.
+Each task group has
 
-Each task group also comes with a construction function that constructs a new instance of the group. 
+* a `filterKey` to be referenced in motions. This can be a single key or a sequence of keys.
+* a construction function that constructs a new instance of the group. 
+* a list of `manageHooks` that define the [window styles](window-style) that you can cycle using `M-t` and `M-S-t`
 
 Checkout [xmonad.hs][xmonad.hs] for how to define task groups.
 
@@ -191,6 +194,8 @@ Some points to note:
     * when used as selection this performs workspace-wise selection
 * `[{g}<num>]]`: to the `<num>`'th workspace forward
     * when used as selection this performs workspace-wise selection
+* `;`: repeat the last `g<group>`, `G<group>`, `'<tag>` search motion
+* `,`: reverse the last `g<group>`, `G<group>`, `'<tag>` search motion
 
 ### History jumplist
 
@@ -275,6 +280,23 @@ paste the windows in register `<reg>`
 
 remove the association between the windows selected by `<motion/object>` with any registers
 
+#### Repeat
+
+    .
+
+repeat the last command
+
+### Window style
+
+Window style is a convenient way to configure the commonly used positions and dimensions for float windows.
+
+For each type of window (as defined by the task group), you have the opportunity to define the list of float styles.
+
+Note you would almost certainly want to include `doSink` in the list so that one of the styles is sinking the window back into the tiles.
+
+* `M-t`: cycle forward in the style list for the current window
+* `M-S-t`: cycle backward in the style list for the current window
+
 ### Macro
 
 Macros are by default stored under `~/.macros`. There are two types of macros
@@ -342,6 +364,10 @@ These commands operate on
 
 * `[g<num>]W`: swap the current window `<num>` of times down the line
 * `[g<num>]B`: swap the current window `<num>` of times up the line
+* `[g<num>]<S-C-j>`: swap the current line `<num>` of times down
+* `[g<num>]<S-C-k>`: swap the current line `<num>` of times up
+* `[g<num>]<S-C-h>`: swap the current row `<num>` of times left
+* `[g<num>]<S-C-l>`: swap the current row `<num>` of times right
 * `[g<num>]}`: shift the current window to the workspace `<num>` of distance down
 * `[g<num>]{`: shift the current window to the workspace `<num>` of distance up
 * `[g<num>]<C-]>`: swap the current workspace `<num>` of times down
@@ -433,6 +459,12 @@ Search windows by register/title/workspace name in the current X session
 
 * `M-/`: search windows and navigate to the selected one
 * `M-?`: search windows and bring the selected one to the current workspace
+
+#### Wallpaper prompt
+
+The wallpaper prompt enables you to switch wallpapers on the fly; it also has a [wallbase backend](https://github.com/sevensins/Wallbase-Downloader) as well as a rss downloader backend (for flickr) for you to search and download wallpapers by tag/description.
+
+Wallpaper prompt is triggered by `M-z`. When the prompt is active, all the windows will be painted semi-transparent so that you can look through them to see the glory of the wallpapers.
 
 ## Disclaimer
 

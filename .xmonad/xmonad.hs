@@ -292,7 +292,7 @@ myStatusBars = do
         statbarx = w - statbarw
         myDzenBar x w a = dzenBar x 0 w myDzenBarHeight a myFgColor myBgColor myDzenFont
         myLogBar = myDzenBar xbarx xbarw "l"
-        myStatBar = pipe (conky $ myXMonadDir++"/.conky_dzen") (myDzenBar statbarx statbarw "r") 
+        myStatBar = (conky $ myXMonadDir++"/.conky_dzen") `pipe` (myDzenBar statbarx statbarw "r") 
     handle <- spawnPipe myLogBar
     spawn myStatBar
     return handle
