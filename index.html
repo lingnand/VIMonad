@@ -1,33 +1,44 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
-    <meta charset='utf-8'>
+    <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>VIMonad by lynnard</title>
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="javascripts/main.js"></script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 
-    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen" />
-    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
-    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
-
-    <title>Vimonad by lynnard</title>
   </head>
-
   <body>
 
-    <header>
-      <div class="container">
-        <h1>Vimonad</h1>
-        <h2>Bringing VIM philosophy into window management</h2>
+      <header>
+        <h1>VIMonad</h1>
+        <p>Bringing VIM philosophy into window management</p>
+      </header>
 
-        <section id="downloads">
-          <a href="https://github.com/lynnard/VIMonad/zipball/master" class="btn">Download as .zip</a>
-          <a href="https://github.com/lynnard/VIMonad/tarball/master" class="btn">Download as .tar.gz</a>
-          <a href="https://github.com/lynnard/VIMonad" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
-        </section>
-      </div>
-    </header>
+      <div id="banner">
+        <span id="logo"></span>
 
-    <div class="container">
-      <section id="main_content">
+        <a href="https://github.com/lynnard/VIMonad" class="button fork"><strong>View On GitHub</strong></a>
+        <div class="downloads">
+          <span>Downloads:</span>
+          <ul>
+            <li><a href="https://github.com/lynnard/VIMonad/zipball/master" class="button">ZIP</a></li>
+            <li><a href="https://github.com/lynnard/VIMonad/tarball/master" class="button">TAR</a></li>
+          </ul>
+        </div>
+      </div><!-- end banner -->
+
+    <div class="wrapper">
+      <nav>
+        <ul></ul>
+      </nav>
+      <section>
         <h1>
 <a name="vimonad" class="anchor" href="#vimonad"><span class="octicon octicon-link"></span></a>VIMonad</h1>
 
@@ -88,20 +99,20 @@
 
 <ol>
 <li>clone the repo somewhere</li>
-<li>move all the scripts under <a href="bin">bin</a> to a directory included in <code>$PATH</code>
+<li>move all the scripts under <code>bin</code> to a directory included in <code>$PATH</code>
 </li>
-<li>copy files under <a href=".xmonad">.xmonad</a> to <code>~/.xmonad</code> (note your old xmonad configuration will be overriden)
+<li>copy files under <code>.xmonad</code> to <code>~/.xmonad</code> (note your old xmonad configuration will be overriden)
 
 <ul>
 <li>
-<a href=".xmonad/xmonad.hs" title="VIMonad template configuration">.xmonad/xmonad.hs</a> serves as a template config file; modify it if you'd like</li>
+<code>.xmonad/xmonad.hs</code> serves as a template config file; modify it if you'd like</li>
 </ul>
 </li>
 <li>
-<code>cd</code> into <a href="xmonad">xmonad</a>; <code>cabal install</code>
+<code>cd</code> into <code>xmonad</code>; <code>cabal install</code>
 </li>
 <li>
-<code>cd</code> into <a href="XMonadContrib">XMonadContrib</a>; <code>cabal install</code>
+<code>cd</code> into <code>XMonadContrib</code>; <code>cabal install</code>
 </li>
 </ol><h2>
 <a name="concepts" class="anchor" href="#concepts"><span class="octicon octicon-link"></span></a>Concepts</h2>
@@ -195,9 +206,9 @@
 <li>a construction function that constructs a new instance of the group. </li>
 <li>a list of <code>manageHooks</code> that define the <a href="#window-style">window styles</a> that you can cycle using <code>M-t</code> and <code>M-S-t</code>
 </li>
-</ul><p>Checkout <a href=".xmonad/xmonad.hs" title="VIMonad template configuration">xmonad.hs</a> for how to define task groups.</p>
+</ul><p>Check out <code>.xmonad/xmonad.hs</code> for how to define task groups.</p>
 
-<p>Checkout <a href="XMonadContrib/XMonad/Vim/TaskGroup.hs">Taskgroup.hs</a> for source about task groups.</p>
+<p>Check out <code>XMonadContrib/XMonad/Vim/Taskgroup.hs</code> for source about task groups.</p>
 
 <h3>
 <a name="register" class="anchor" href="#register"><span class="octicon octicon-link"></span></a>Register</h3>
@@ -874,8 +885,12 @@
 <li>VIMonad might cause slowdown (as compared to the vanilla XMonad)</li>
 </ul><p>If you intend to try VIMonad and have encountered any problem, you're welcome to use the <a href="https://github.com/lynnard/VIMonad/issues">issue tracker</a>.</p>
       </section>
+      <footer>
+        <p>Project maintained by <a href="https://github.com/lynnard">lynnard</a></p>
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://twitter.com/michigangraham">mattgraham</a></small></p>
+      </footer>
     </div>
-
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
     
   </body>
 </html>
