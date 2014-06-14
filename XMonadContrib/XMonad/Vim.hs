@@ -353,7 +353,7 @@ printRegs (VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor _ _) tg
     mwins <- getMinimizedWindows
     let ls = filter (not . null . snd) $ zip als altags
         (wins, _) = unzip ls
-        regs = sortRegs $ S.toList $ S.fromList $ concat $ fmap snd ls
+        regs = sortRegs $ nub $ concat $ fmap snd ls
         unrefed = filter (not . (`elem` wins)) mwins
     rwins <- mapM (\r -> filterM (hasTag r) wins) regs
     -- now for each tag we scan through the list to get all the windows
@@ -466,7 +466,18 @@ regUnnamedKey = (""
                 , False
                 , \_ _ -> return Nothing
                 , \_ -> return [])
-regTagPrompt xpc prompt a = initMatches >>= \r -> tagPrompt (xpc r) {
+
+data RegPrompt = RegPrompt String
+instance XPrompt RegPrompt where
+    showXPrompt (RegPrompt prompt) = prompt
+
+regPrompt config prompt action = do
+    allRegs <- allOrderedWindows >>= mapM getTags
+    let regs = sortRegs $ nub $ concat allRegs
+        compl s = return $ filter (searchPredicate config s) regs
+    mkXPromptWithReturn (RegPrompt prompt) config compl action
+
+regTagPrompt xpc prompt a = initMatches >>= \r -> regPrompt (xpc r) {
     searchPredicate = prefixSearchPredicate
 } prompt a
 regPromptKeys xpc p = regPromptKeys' xpc p p

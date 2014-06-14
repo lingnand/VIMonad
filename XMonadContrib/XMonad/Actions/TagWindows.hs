@@ -174,16 +174,16 @@ shiftToScreen sid w s = case filter (\m -> sid /= screen m) ((current s):(visibl
                                 []      -> s
                                 (t:_)   -> shiftWin (tag . workspace $ t) w s
 
-data TagPrompt = TagPrompt String
+data TagPrompt = TagPrompt
 
 instance XPrompt TagPrompt where
-    showXPrompt (TagPrompt s) = s
+    showXPrompt TagPrompt = "Select Tag:   "
 
 
-tagPrompt :: XPConfig -> String -> (String -> X a) -> X (Maybe a)
-tagPrompt c p f = do
+tagPrompt :: XPConfig -> (String -> X ()) -> X ()
+tagPrompt c f = do
   sc <- tagComplList
-  mkXPromptWithReturn (TagPrompt p) c (mkComplFunFromList' sc) f
+  mkXPrompt TagPrompt c (mkComplFunFromList' sc) f
 
 tagComplList :: X [String]
 tagComplList = gets (concat . map (integrate' . stack) . workspaces . windowset) >>=
@@ -191,11 +191,11 @@ tagComplList = gets (concat . map (integrate' . stack) . workspaces . windowset)
     return . nub . concat
 
 
-tagDelPrompt :: XPConfig -> String -> X ()
-tagDelPrompt c p = do
+tagDelPrompt :: XPConfig -> X ()
+tagDelPrompt c = do
   sc <- tagDelComplList
   if (sc /= [])
-    then mkXPrompt (TagPrompt p) c (mkComplFunFromList' sc) (\s -> withFocused (delTag s))
+    then mkXPrompt TagPrompt c (mkComplFunFromList' sc) (\s -> withFocused (delTag s))
     else return ()
 
 tagDelComplList :: X [String]
