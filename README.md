@@ -28,6 +28,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
 * [ranger](http://nongnu.org/ranger/): for deciding the program to launch files from [Dynamic prompt](#dynamic-prompt)
 * [feh](http://feh.finalrewind.org/): for changing wallpapers via [Wallpaper prompt](#wallpaper-prompt)
+* [rss-image-download](https://github.com/lynnard/rss-image-download): for subscribing to rss image feeds on the fly via [Wallpaper prompt](#wallpaper-prompt)
 
 ### Steps
 
