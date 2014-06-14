@@ -20,7 +20,7 @@ import XMonad.Hooks.OnWindowsInserted
 import XMonad.Vim.Routine
 import Data.Maybe
 import XMonad.Prompt.TaskPrompt
-import XMonad.Prompt.FMCPrompt
+import XMonad.Prompt.RPCPrompt
 import XMonad.Vim.WorkspaceDirectories
 import XMonad.Util.Run
 import XMonad.Vim.Tag
@@ -140,7 +140,7 @@ dynamicPromptWidgets = [
       , dwgtDictMode modernCHSDMode "sdcv-modernChinese"
       , dwgtDictMode bigCHSDMode "sdcv-bigChinese"
       , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction'
-      , dwgt FMCPrompt "fmc" (\c -> fmcComplFunc) fmcAction'
+      , dwgt RPCPrompt "rpc" (\c -> rpcComplFunc) rpcAction'
       , dwgtMode CalcMode "calc"
     ]
 
@@ -355,7 +355,7 @@ dynamicPrompt' c cmds home history hist immi final owi = do
 
 -- cycling between different dictionary
 defaultDictionaries = ["sdcv-Collins", "sdcv-Moby", "sdcv-modernChinese", "sdcv-bigChinese"]
-dpromptPrefices = defaultDictionaries ++ ["vb", "calc", "tk", "fmc"]
+dpromptPrefices = defaultDictionaries ++ ["vb", "calc", "tk", "rpc"]
 cycleDictionaryForDPrompt dir = do
     str <- getInput
     let ls = (if dir == Next then id else reverse) defaultDictionaries

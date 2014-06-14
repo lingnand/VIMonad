@@ -9,7 +9,7 @@ module XMonad.Vim.Prompt.Wallpaper
 
 import XMonad
 import XMonad.Prompt
-import XMonad.Prompt.FMCPrompt
+import XMonad.Prompt.RPCPrompt
 import XMonad.Prompt.Shell
 import XMonad.Vim.Routine
 import Data.List

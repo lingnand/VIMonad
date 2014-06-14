@@ -22,7 +22,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 
 * [cabal](http://www.haskell.org/cabal/): for installing packages
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
-* [FMD](http://github.com/lynnard/fmd) and [FMC][FMC]: if you'd like to use the radio service in VIMonad
+* [rpd](http://github.com/lynnard/rpd): if you'd like to use the radio service in VIMonad
 * [taskwarrior][task]: task management from the prompt
 * [vimb][vimb]: light-weight browser with its histories and bookmarks accessible from the prompt
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
@@ -447,7 +447,7 @@ You can
     * dictionaries (using `sdcv`)
     * calculator (using `calc`)
     * [vimb][vimb] history and bookmarks
-    * [FMC] radio service for douban.fm and jing.fm
+    * [rpc] radio service for douban.fm and jing.fm
 * execute shortcut commands, e.g.
     * `M-d`/`M-C-d`: cycle dictionaries forward/backwards
     * `M-h`: reboot
@@ -477,6 +477,6 @@ I've put a lot of effort into VIMonad over the years, but there is no guarantee 
 If you intend to try VIMonad and have encountered any problem, you're welcome to use the [issue tracker](https://github.com/lynnard/VIMonad/issues).
 
 [xmonad.hs]: .xmonad/xmonad.hs "VIMonad template configuration"
-[FMC]: http://github.com/lynnard/fmc "FMD radio client"
+[rpc]: http://github.com/lynnard/rpc "rpd client"
 [vimb]: https://github.com/fanglingsu/vimb/ "Vimb"
 [task]: http://taskwarrior.org/ "Taskwarrior"

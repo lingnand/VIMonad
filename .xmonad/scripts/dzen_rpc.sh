@@ -57,7 +57,7 @@ cutstr() {
 }
 
 DIFFUSION=0
-output="`fmc info $'%u\t%t\t%a\t%c\t%k\t%r'`"
+output="`rpc info $'%u\t%t\t%a\t%c\t%k\t%r'`"
 status="`cut -d$'\t' -f1 <<< "$output"`"
 cutstr "$channel_limit" "`cut -d$'\t' -f4 <<< "$output"`"
 channel="$RESULT"

@@ -297,7 +297,7 @@ library
                         XMonad.Prompt.Workspace
                         XMonad.Prompt.XMonad
                         XMonad.Prompt.TaskPrompt
-                        XMonad.Prompt.FMCPrompt
+                        XMonad.Prompt.RPCPrompt
                         XMonad.Util.Cursor
                         XMonad.Util.CustomKeys
                         XMonad.Util.DebugWindow
