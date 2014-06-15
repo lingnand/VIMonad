@@ -1057,12 +1057,12 @@ mkDynamicPrompt' myModMask xpc immediate final owi = initMatches >>= \r -> dynam
                 , ((myModMask .|. controlMask, xK_d), cycleDictionaryForDPrompt Prev)
                 , ((myModMask, xK_d), cycleDictionaryForDPrompt Next)
                 -- fmd related
-                , ((myModMask, xK_f), addOrTruncateTillPrefix "fmc ")
-                , ((myModMask, xK_n), setInputAndDone "fmc next")
-                , ((myModMask, xK_a), setInputAndDone "fmc rate")
-                , ((myModMask, xK_t), setInputAndDone "fmc toggle")
-                , ((myModMask, xK_s), setInput "fmc setch " >> endOfLine)
-                , ((myModMask, xK_w), setInputAndDone "fmc webpage")
+                , ((myModMask, xK_f), addOrTruncateTillPrefix "rpc ")
+                , ((myModMask, xK_n), setInputAndDone "rpc next")
+                , ((myModMask, xK_a), setInputAndDone "rpc rate")
+                , ((myModMask, xK_t), setInputAndDone "rpc toggle")
+                , ((myModMask, xK_s), setInput "rpc setch " >> endOfLine)
+                , ((myModMask, xK_w), setInputAndDone "rpc webpage")
                 -- system related
                 -- suspend after one sec to avoid keyboard-mashing to wake up the machine again
                 , ((myModMask, xK_l), setInputAndDone "sleep 1; systemctl suspend")
