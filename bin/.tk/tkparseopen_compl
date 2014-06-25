@@ -1,0 +1,6 @@
+#! /bin/sh
+PARSER="$HOME/bin/.tk/tkparseopen"
+"$PARSER" "$@"
+if (( $? != 0 )); then
+    "$PARSER" -A "$@"
+fi

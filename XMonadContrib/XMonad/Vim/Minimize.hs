@@ -5,6 +5,7 @@ module XMonad.Vim.Minimize
       minimizeWindows
     , minimizeWindow
     , getMinimizedWindows
+    , removeMinimizedState
     , deminimizeWindows
     , deminimizeWindow
     , isMinimized
@@ -32,11 +33,14 @@ minimizeWindows ls = do
 
 minimizeWindow w = minimizeWindows [w]
 
-deminimizeWindows ls = do
+removeMinimizedState ls = do
     MinimizedWindows ol <- XS.get
     let (inl, outl) = partition (`elem` ls) ol
-    mapM manage $ reverse inl
     XS.put $ MinimizedWindows outl
+    return inl
+
+deminimizeWindows ls = do
+    removeMinimizedState ls >>= mapM manage
 
 deminimizeWindow w = deminimizeWindows [w]
 

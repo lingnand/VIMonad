@@ -1,0 +1,3 @@
+#! /bin/sh
+
+taskopen -l "$@" | egrep -o '[0-9]+\) .*\)'

@@ -220,8 +220,9 @@ taskFilterCompl args hasCmd =
 ---- helpers
 parseArgs s = splitOn " " s
 filteredListContainingWord word =  filter (wordInside word) 
-wordInside word s = isInfixOf word $ map toLower s
-wordPrefixed word s = isPrefixOf word $ map toLower s
+sl = map toLower
+wordInside word s = isInfixOf (sl word) $ sl s
+wordPrefixed word s = isPrefixOf (sl word) $ sl s
 breakAt condition str = (behinds, nearest)
     where fields = break condition (reverse str)
           nearest = reverse $ fst fields

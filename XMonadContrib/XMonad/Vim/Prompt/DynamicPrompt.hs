@@ -282,7 +282,7 @@ dpromptComplFunc c cmds home hist myScriptsDir s = do
                             _ -> trycmp [scopecmp, shellcmp]
 
 
-cmdsWithGUI = ["xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition"]
+cmdsWithGUI = ["chromium", "firefox", "xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition"]
 dpromptAction c cmds home history hist myScriptsDir immi final owi s = 
         -- perform some special actions on some commands
         let args = parseShellArgs s

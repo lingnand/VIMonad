@@ -446,6 +446,7 @@ deminimizeFocus w = do
 
 killWindows ls = flip correctFocus ls $ \wins -> do
     deleteWindowsSelection wins
+    removeMinimizedState wins
     -- now just kill all windows that 
     mapM_ killWindow wins
 

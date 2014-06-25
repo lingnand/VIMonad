@@ -1,0 +1,32 @@
+#!/bin/sh
+
+
+tasknotes_dir="$HOME/tasknotes"
+tasknote_ext=".md"
+#task "$@" annotate -- Notes
+shopt -s extglob
+
+for id in "$@"
+do
+    # add the annotation 
+    task "$id" annotate -- Notes
+    # create a new file in the tasknotes directory with the given 
+    uuid="`task "$id" uuid`"
+    # we should be using info, which works even for completed tasks
+    des="`task "$id" info | grep '^Description'`"
+    title="${des##Description*( )}"
+    file="$tasknotes_dir/$uuid$tasknote_ext"
+    user="`whoami`"
+    date="`date '+%d %B %Y'`"
+    if ! [ -f "$file" ]; then
+        touch "$file"
+        # add in the title and author and date
+        cat > "$file" << END
+% $title
+% $user
+% $date
+END
+    fi
+done
+
+shopt -u extglob

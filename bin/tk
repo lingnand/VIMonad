@@ -1,0 +1,251 @@
+#!/bin/bash
+
+# This script is intended to make the schedule date feature of task to work more nicely so that it can act like an appointment tracker as well
+
+# the time operands you can specify with this version
+# 1. MMDD@HHmm
+# 2. {today,tmr,...,}@{any time format recognized by date}  e.g., today@2pm
+# 3. <num>h                     number of hours away from now (only applicable to the due: arg when scheduled: is present)
+# 4. <num>m                     number of minutes away from now (only applicable to the due: arg when scheduled: is present)
+
+# new commands
+# note ...                                                              similar to 'add', but immediately launch a vim to edit the tasknote associated with the task
+# appoint ... scheduled:<date/time> due:<date/time/duration>            similar to 'add', but create a task tagged by APPOINTMENT
+
+# firstly, it extracts any parameter that concerns with schedule or due, then it parses the date and the time using date. after that it just supplies the formal date/time argument to the scheduled 
+LOG_PATH="$HOME/bin/.tk/tklog"
+TK_TIME_FORMAT="%m%d@%H%M"
+DEFAULT_DUR="1h"
+DEFAULT_TIME="00"
+
+APPOINT_CMD="appoint"
+APPOINT_TAG="APPOINTMENT"
+
+OPEN_CMD="open"
+OPEN_PARSER="$HOME/bin/.tk/tkparseopen"
+# note cmd to quickly add a task and then open its note
+NOTE_CMD="note"
+TMP_FILE='/tmp/task_latest'
+
+is_cmd() {
+    local grep=`task _commands | egrep -o '^'"$1"'$'`
+    [ -n "$grep" ] || [ "$1" = "$APPOINT_CMD" ] || [ "$1" = "$OPEN_CMD" ] || [ "$1" = "$NOTE_CMD" ]
+}
+
+# given a normal form of <some date>@<some time>, resolve it into standard date description format
+date_description_form() {
+    local date_time=$1
+    # prior processing
+    local date=${date_time%%@*} time=
+    # if any part is in shortform; then need to expand it
+    if [[ "$date" =~ [0-9]{4} ]]; then
+        # insert / inside
+        local mon=${date:0:2} day=${date:2}
+        date="$mon/$day"
+    fi
+    if [[ "$date_time" = *@* ]]; then
+        time=${date_time##*@}
+        if [[ "$time" =~ [0-9]{4} ]]; then
+            # insert : inside
+            local hr=${time:0:2} min=${time:2}
+            time="$hr:$min"
+        fi
+    else
+        # we don't have the time field
+        # just add a default is sufficient
+        time=$DEFAULT_TIME
+    fi
+
+    date_time="$date $time"
+    date_time="`sub_common_words "$date_time"`"
+    #echo "the date time = $date_time"
+
+    echo "$date_time"
+}
+
+sub_common_words() {
+    local word=$1
+    word=${word//tmr/tomorrow}
+    echo "$word"
+}
+
+convert_to_tk_date_time() {
+    # we do nothing if it doesn't contain @
+    local converted=
+    # we'd only want to modify it if it follows the date@time pattern AND it's not in the shorthand form
+    if [[ "$1" =~ @ ]] || [[ "$1" =~ [0-9]{4} ]]; then
+        local date_time="`date_time "$1"`"
+        local label="`label "$1"`"
+        converted=$(date -d "`date_description_form "$date_time"`" "+$label$TK_TIME_FORMAT")
+    else
+        converted="`sub_common_words "$1"`"
+        #converted=$1
+    fi
+
+    echo "$converted"
+}
+
+date_time() {
+    echo ${1##*:}
+}
+
+label() {
+    echo "${1%%:*}:"
+}
+
+ATTRIBUTE_MODS="before|under|below|after|over|above|none|any|is|equals|isnt|not|has|contains|hasnt|startswith|left|endswith|right|word|noword"
+
+is_sche_arg() {
+    [[ "$1" =~ ^(sche|sched|schedu|schedul|schedule|scheduled)(\.($ATTRIBUTE_MODS))?: ]]
+}
+
+is_due_arg() {
+    [[ "$1" =~ ^due(\.($ATTRIBUTE_MODS))?: ]]
+}
+
+error() {
+    echo "$1" > "$LOG_PATH"
+    exit 1
+}
+
+duration_to_s() {
+    local due_time="`date_time "$1"`" due_hr= due_min= due_s=
+    # the only format allowed right now is <n>h<n>m
+    due_hr="`echo "$due_time" | egrep -o '[1-9][0-9]*h'`"
+    due_hr=${due_hr:-0}
+    due_hr=${due_hr%%h*}
+    due_min="`echo "$due_time" | egrep -o '[1-9][0-9]*m'`"
+    due_min=${due_min:-0}
+    due_min=${due_min%%m*}
+    # convert into seconds 
+    due_s=$(( 60 * (60 * $due_hr + $due_min) ))
+
+    echo "$due_s"
+}
+
+# $1 is the due time argument; $1 is the schedule time argument
+convert_modified_due_to_tk_date_time() {
+    if [[ "$1" =~ @ ]]; then
+        convert_to_tk_date_time "$1"
+    else
+        local due_s=`duration_to_s "$1"`
+        #echo "due_s=$due_s"
+        local sche_s=`arg_to_s "$2"`
+        #echo "$2"
+        #echo "sche_s=$sche_s"
+        local due_time='@'"$(( $sche_s + $due_s ))"
+        #echo "$due_time"
+        local converted="`date -d "$due_time" "+due:$TK_TIME_FORMAT"`"
+
+        echo "$converted"
+    fi
+}
+
+arg_to_s() {
+    local time="`date_time "$1"`"
+    local converted_s=$(date -d "`date_description_form "$time"`" "+%s")
+    echo "$converted_s"
+}
+
+# we need to treat filter and modifiers differently though: the filter will only get the 
+new_args=()
+action=
+open_index=
+
+cmd_reached=false
+sche_arg=
+due_arg=
+
+for arg in "$@"
+do
+    if $cmd_reached; then
+        if is_sche_arg "$arg"; then
+            sche_arg=$arg
+        elif is_due_arg "$arg"; then
+            due_arg=$arg
+            arg=
+        fi
+    elif is_cmd "$arg"; then
+        action="$arg"
+        case "$arg" in
+            "$APPOINT_CMD") #convert the argument into something that makes sense to taskwarrior
+                arg="+$APPOINT_TAG"
+                new_args+=("add")
+                ;;
+            "$NOTE_CMD")
+                arg='add'
+                ;;
+            "$OPEN_CMD") # we can skip the loop and directly get to the end
+                open_index="${#new_args[@]}"
+                ;;
+        esac
+        cmd_reached=true
+    fi
+
+    if [ -n "$arg" ]; then
+        if is_sche_arg "$arg" || is_due_arg "$arg"; then
+            #echo "sche_arg = $arg"
+            arg="`convert_to_tk_date_time "$arg"`"
+            #echo "converted = $arg"
+        fi
+        new_args+=("$arg")
+    fi
+done
+
+
+if [ -n "$sche_arg" ]; then
+    if [ -z "$due_arg" ] && ([ "$action" = 'add' ] || [ "$action" = 'note' ]); then 
+        due_arg="due:$DEFAULT_DUR"
+    fi
+    [ -n "$due_arg" ] && due_arg="`convert_modified_due_to_tk_date_time "$due_arg" "$sche_arg"`"
+elif [ -n "$due_arg" ]; then
+    due_arg="`convert_to_tk_date_time "$due_arg"`"
+fi
+
+## add back the due arg if there's one
+[ -n "$due_arg" ] && new_args+=("$due_arg")
+
+# for arg in "${new_args[@]}"
+# do
+#     echo "$arg"
+# done
+# exit 0
+
+if [ "$action" = 'open' ]; then
+    # get the open index
+    oi="${new_args[(($open_index+1))]}"
+    # get the filter (that's all the things before the open_index
+    filter=
+    for (( i=0; i<$open_index; i++ ))
+    do
+        filter="$filter ${new_args[$i]}"
+    done
+    filter="${filter# }"
+    option=
+    count="`"$OPEN_PARSER" "$filter" | wc -l`"
+    if (( "$count" == 0 )); then
+        option='-A'
+        count="`"$OPEN_PARSER" "$option" "$filter" | wc -l`"
+    fi
+    if [[ "$oi" =~ ^[0-9]+$ ]]; then
+        echo "$oi" | taskopen "$option" "$filter"
+    elif [ "$TERM" = 'xterm-256color' ] || (( "$count" <= 1 )); then
+        taskopen "$option" "$filter"
+    else 
+        # in this case we are not in a proper terminal (presumably in a subprocess)
+        echo -n "$filter open " | xsel
+        xdotool key --delay 80 Hyper_L+z Control_L+y
+    fi
+else
+    task "${new_args[@]}"
+    if [ "$action" = 'note' ]; then
+        # needs to get the latest task and open it
+        id="`task newest | egrep -o '[0-9]+' | head -n 1`"
+        if [ -n "$id" ]; then
+            #echo "$id"
+            taskopen "$id"
+        fi
+    fi
+fi
+
+
