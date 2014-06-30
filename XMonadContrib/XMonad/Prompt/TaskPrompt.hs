@@ -28,7 +28,7 @@ taskListCmds = ["active", "all", "blocked", "blocking", "burndown.daily", "burnd
 taskFilterCmds = ["active", "all", "blocked", "blocking", "burndown.daily", "burndown.weekly", "burndown.monthly", "completed", "count", "export", "ghistory.annual", "ghistory.monthly", "history.annual", "history.monthly", "ids", "uuids", "information", "list", "long", "ls", "minimal", "up", "upcoming", "newest", "next", "ready", "oldest", "overdue", "projects", "recurring", "unblocked", "waiting", "annotate", "append", "delete", "denotate", "done", "duplicate", "edit", "modify", "open", "prepend", "start", "stop", "_urgency"]
 
 ---- new action command: appoint, note, open
-taskActionCmds = ["add", "annotate", "append", "note", "appoint", "config", "delete", "denotate", "done", "duplicate", "edit", "execute", "export", "import", "log", "merge", "modify", "open", "prepend", "pull", "push", "shell", "start", "stop", "undo"]
+taskActionCmds = ["add", "annotate", "append", "note", "appoint", "config", "delete", "denotate", "done", "duplicate", "edit", "execute", "export", "import", "log", "merge", "mod", "modify", "open", "prepend", "pull", "push", "shell", "start", "stop", "undo"]
 
 taskOtherCmds = ["_aliases", "_columns", "_commands", "_config", "_ids", "_projects", "_show", "_tags", "_udas", "_uuids", "_version", "_zshcommands", "_zshids", "_zshuuids"]
 

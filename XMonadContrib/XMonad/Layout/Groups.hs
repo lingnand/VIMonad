@@ -30,8 +30,10 @@ module XMonad.Layout.Groups ( -- * Usage
                               -- ** Useful 'ModifySpec's
                             , swapUp
                             , swapUpN
+                            , swapWindowsUpN
                             , swapDown
                             , swapDownN
+                            , swapWindowsDownN
                             , swapWith
                             , swapWithLast
                             , insertAt
@@ -108,7 +110,7 @@ import qualified XMonad.StackSet as W
 import XMonad.Util.Stack
 
 import Prelude hiding (filter)
-import qualified Data.List as L ((\\), maximumBy, find, filter)
+import qualified Data.List as L ((\\), maximumBy, find, filter, partition, elemIndex, isInfixOf)
 import Data.Maybe (isJust, isNothing, fromMaybe, catMaybes, fromJust)
 import Data.Either
 import Data.Tuple
@@ -794,17 +796,24 @@ swapWithZ _ (Just s) = Just s
 swapWith :: Int -> ModifySpec
 swapWith = onFocused . swapWithZ
 
--- insert the focused window at the i'th position
-insertAtZ :: Int -> Zipper a -> Zipper a
-insertAtZ _ Nothing = Nothing
-insertAtZ i (Just s@(W.Stack f up down))
-    | i < 0 = Nothing
-    | i < length up = let (bf, af) = splitAt i (reverse up) in Just $ W.Stack f (reverse bf) (af++down)
-    | i == length up = Just s
-    | otherwise = let (bf, af) = splitAt (i-(length up)) down in Just $ W.Stack f ((reverse bf) ++ up) af
+-- insert the given windows before the i'th position
+insertAtZ :: [Window] -> Int -> Zipper Window -> Zipper Window
+insertAtZ _ _ Nothing = Nothing
+insertAtZ [] _ s = s
+insertAtZ wins i (Just s@(W.Stack f _ _))
+    | i < 0 = Just s
+    | otherwise = let (left, right) = splitAt i $ W.integrate s
+                      part = L.partition (`elem` wins)
+                      (lin, lout) = part left
+                      (rin, rout) = part right
+                      ls = lout ++ lin ++ rin ++ rout
+                      -- we should probably keep focus - this is the most consistent way
+                  in case break (==f) ls of
+                          (bef, _:aft) -> Just $ W.Stack f (reverse bef) aft
+                          _ -> Nothing
 
-insertAt :: Int -> ModifySpec
-insertAt = onFocused . insertAtZ
+insertAt :: [Window] -> Int -> ModifySpec
+insertAt wins = onFocused . insertAtZ wins
 
 swapWithLastZ :: Zipper a -> Zipper a
 swapWithLastZ Nothing = Nothing
@@ -892,6 +901,26 @@ focusGroupAt i _ = focusAtZ i
 -- | Swap the current group with the i'th group
 swapGroupWith :: Int -> ModifySpec
 swapGroupWith i _ = swapWithZ i
+
+swapWindowsZ :: T.Direction1D -> [Window] -> Zipper Window -> Zipper Window
+swapWindowsZ _ [] s = s
+swapWindowsZ dir wins (Just s@(W.Stack f _ _))
+    = let l = rev $ W.integrate s
+          rev = if dir == T.Next then reverse else id
+          ws = L.filter (`elem` wins) l
+          (left, right) = break (`elem` ws) l
+          fright = L.filter (not . (`elem` ws)) right
+          fl = rev $ if ws `L.isInfixOf` l
+                         then let (al, bl) = if null left then ([], []) else (init left, [last left])
+                              in al ++ ws ++ bl ++ fright
+                         else left ++ ws ++ fright
+      in case break (==f) fl of
+              (bef, _:aft) -> Just $ W.Stack f (reverse bef) aft
+              _ -> Nothing
+swapWindowsZ _ _ s = s
+
+swapWindowsDownN i wins = onFocused $ (!! i) . iterate (swapWindowsZ T.Next wins)
+swapWindowsUpN i wins = onFocused $ (!! i) . iterate (swapWindowsZ T.Prev wins)
 
 -- | helper
 _removeFocused :: W.Stack a -> (a, Zipper a)

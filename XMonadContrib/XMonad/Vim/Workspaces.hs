@@ -80,6 +80,7 @@ module XMonad.Vim.Workspaces
     , onSelectedWindows
     , onSelectedWindowsAfterMovingToTmpSpace
     , getSelectedWindowStack
+    , getSelectedWindowStackOnlyInFocusStack
     , applySelectedWindowStack
     , exitToNormalMode
     , exitVisualMode
@@ -715,6 +716,7 @@ getSelectedWindowStack' useFocusStackOnly = do
                         _ -> (Nothing, Nothing)
 
 getSelectedWindowStack = fmap fst $ getSelectedWindowStack' False
+getSelectedWindowStackOnlyInFocusStack = fmap fst $ getSelectedWindowStack' True
 
 onSelectedWindows a = do
     (st, _) <- getSelectedWindowStack' False

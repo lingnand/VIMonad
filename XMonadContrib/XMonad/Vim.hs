@@ -985,11 +985,20 @@ historyCommands tgs =
                     , ("M1-", "", toggleWithinGroupPredicate)]
     ]
 
+getSourceIndexInCurrentBase wins = do
+    mgs <- fmap (fmap (G.toZipper . G.baseCurrent)) G.getCurrentGStack
+    case mgs of
+         Just s -> return $ findIndex (`elem` wins) $ W.integrate' s
+         _ -> return $ Nothing
+
+insertAt wins sourceIndex destIndex = 
+    sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.insertAt wins $ if sourceIndex < destIndex then destIndex + 1 else destIndex
+
 layoutCommands tgs = 
     [ ("C-S-"++k, applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToGroupAt n s)
     | (k, n) <- columnKeys]
     ++
-    [ ("M1-S-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.insertAt n)
+    [ ("M1-S-"++k, fmap W.integrate' getSelectedWindowStackOnlyInFocusStack >>= \l -> getSourceIndexInCurrentBase l >>= maybe (return ()) (\si -> insertAt l si n))
     | (k, n) <- tabKeys]
     ++
     [ ("M1-C-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith n)
@@ -1000,15 +1009,15 @@ layoutCommands tgs =
     -- swap interface (using the new countable interface)
     ++
     concatMap (processKey . addPrefix)
-    [ (nk++ck++"S-"++fk, sendMessage msg)
+    [ (nk++ck++"S-"++fk, action)
     | (nk, n) <- numberMotionKeys
-    , (fk, ck, msg) <- [ ("b", "", G.ToFocused $ SomeMessage $ G.Modify $ G.swapUpN n)
-                       , ("w", "", G.ToFocused $ SomeMessage $ G.Modify $ G.swapDownN n)
-                       , ("k", "C-", G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupUpN n)
-                       , ("j", "C-", G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupDownN n)
-                       , ("h", "C-", G.Modify $ G.swapGroupUpN n)
-                       , ("l", "C-", G.Modify $ G.swapGroupDownN n)
-                       ]
+    , (fk, ck, action) <- [ ("b", "", fmap W.integrate' getSelectedWindowStackOnlyInFocusStack >>= \l -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWindowsUpN n l)
+                          , ("w", "", fmap W.integrate' getSelectedWindowStackOnlyInFocusStack >>= \l -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWindowsDownN n l)
+                          , ("k", "C-", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupUpN n)
+                          , ("j", "C-", sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapGroupDownN n)
+                          , ("h", "C-", sendMessage $ G.Modify $ G.swapGroupUpN n)
+                          , ("l", "C-", sendMessage $ G.Modify $ G.swapGroupDownN n)
+                          ]
     ]
     ++
     [ ("M-S-k", applySelectedWindowStack False $ \s -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.moveWindowsUp False s)
