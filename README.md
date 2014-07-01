@@ -360,24 +360,26 @@ These commands operate on
 * `M-C-k`: move the selected windows to a new line up
 * `M-C-h`: move the selected windows to a new row left
 * `M-C-l`: move the selected windows to a new row right
+* `[g<num>]W`: swap the selected windows `<num>` of times down the line
+    * when the selected windows are not adjacent to each other, merge them together at the location of the one that is nearest to the end of the line
+* `[g<num>]B`: swap the selected window `<num>` of times up the line
+    * when the selected windows are not adjacent to each other, merge them together at the location of the one that is nearest to the beginning of the line
+* `[g<num>]}`: shift the selected windows to the workspace `<num>` of distance down
+* `[g<num>]{`: shift the selected windows to the workspace `<num>` of distance up
+* `<M1-S-<tab>>`: insert the selected windows at `<tab>`
+* `<C-S-<row>>`: shift the selected windows to `<row>`
+* `<M-S-<workspace>>`: shift the selected windows to `<workspace>`
+* `<M-S-6>`: shift the selected windows to the last visited workspace
 
 ### Other useful keys
 
-* `[g<num>]W`: swap the current window `<num>` of times down the line
-* `[g<num>]B`: swap the current window `<num>` of times up the line
 * `[g<num>]<S-C-j>`: swap the current line `<num>` of times down
 * `[g<num>]<S-C-k>`: swap the current line `<num>` of times up
 * `[g<num>]<S-C-h>`: swap the current row `<num>` of times left
 * `[g<num>]<S-C-l>`: swap the current row `<num>` of times right
-* `[g<num>]}`: shift the current window to the workspace `<num>` of distance down
-* `[g<num>]{`: shift the current window to the workspace `<num>` of distance up
 * `[g<num>]<C-]>`: swap the current workspace `<num>` of times down
 * `[g<num>]<C-[>`: swap the current workspace `<num>` of times up
-* `<M1-S-<tab>>`: insert the current window at `<tab>`
-* `<C-S-<row>>`: shift the current window to `<row>`
-* `<M-S-<workspace>>`: shift the current window to `<workspace>`
 * `<M-6>`: switch to the last visited workspace
-* `<M-S-6>`: shift the current window to the last visited workspace
 * `<M-C-6>`: swap the current workspace with the last visited workspace
 * `M-<Space>`: toggle `Full` layout for the current row (maximize the focused window in the current row)
 * `M-S-<Space>`: toggle `Full` layout for the current workspace (maximize the current row in the workspace)
