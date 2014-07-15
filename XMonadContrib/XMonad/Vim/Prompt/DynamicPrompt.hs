@@ -75,8 +75,8 @@ isSearchFilter (i, s)
     | i > 0 && s `elem` ["h", "l", "t", "which", "diff"] = True 
     -- we let the application to decide what to do after that
     | i > 0 && s `elem` ["g", "gp"] = True
-    | i == 0 && (length s) `elem` [1, 2] && head s == '\'' && not ((last s) `elem` "v") = True
-    | i > 0 && length s == 2 && head s == 'm' && not ((last s) `elem` "v") = True
+    | i == 0 && (length s) `elem` [1, 2] && head s == '\'' = True
+    -- | i > 0 && length s == 2 && head s == 'm' && not ((last s) `elem` "v") = True
     | i > 0 && s == "diff" = True
     | otherwise = False
 -- isStatDiffOutput = (=~ " +\\| +[0-9]+ [+-]+")
@@ -246,8 +246,9 @@ dpromptComplFunc c cmds home hist myScriptsDir s = do
                     (afs, "a":_) -> fasd $ ["-a", "-B", "viminfo"] ++ (reverse afs)
                     (afs, "z":_) -> fasd $ "-d" : (reverse afs)
                     (afs, "h":_) -> return $ take historyLimit $ filter (sp $ joinStr " " $ reverse afs) $ hist
-                    ([], ('\'':pre):_) -> shtout $ sct pre
-                    (afs, ('m':pre):_) -> shellcmp' ["directory"] []
+                    -- marking interface
+                    (_:_, ('\'':pre):[]) -> shellcmp' ["directory"] []
+                    ([], ('\'':pre):_) -> sct pre
                     (afs, "l":_) -> shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ reverse afs)) ""
                     -- for g, we demand that at least SOME search term is entered, otherwise we don't generate the necessary output
                     (af:afs, "g":_) -> trycmp $ (if afs == [] then [shellcmp' ["file"] []] else []) ++ [grepcmp (reverse $ af:afs)]
@@ -282,14 +283,14 @@ dpromptComplFunc c cmds home hist myScriptsDir s = do
                             _ -> trycmp [scopecmp, shellcmp]
 
 
-cmdsWithGUI = ["chromium", "firefox", "xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition"]
+cmdsWithGUI = ["chromium", "firefox", "xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
 dpromptAction c cmds home history hist myScriptsDir immi final owi s = 
         -- perform some special actions on some commands
         let args = parseShellArgs s
             follow = immi >> final
         in case (findWidgetForAction s, args) of
                 (Just (rest, w), _) -> (promptAction w) immi final owi rest
-                (_, [('m':pre:[]), pa]) -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
+                (_, ('\'':pre:[]):pa:_) -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
                 (_, "reboot":_) -> removeAllWorkspaces >> spawn "reboot"
                 (_, "systemctl":"poweroff":_) -> removeAllWorkspaces >> spawn "systemctl poweroff"
                 (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do

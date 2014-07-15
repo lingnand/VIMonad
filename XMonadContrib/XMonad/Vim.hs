@@ -1066,7 +1066,7 @@ mkDynamicPrompt' myModMask xpc immediate final owi = initMatches >>= \r -> dynam
                 , ((myModMask .|. controlMask, xK_d), cycleDictionaryForDPrompt Prev)
                 , ((myModMask, xK_d), cycleDictionaryForDPrompt Next)
                 -- fmd related
-                , ((myModMask, xK_f), addOrTruncateTillPrefix "rpc ")
+                , ((myModMask, xK_r), addOrTruncateTillPrefix "rpc ")
                 , ((myModMask, xK_n), setInputAndDone "rpc next")
                 , ((myModMask, xK_a), setInputAndDone "rpc rate")
                 , ((myModMask, xK_t), setInputAndDone "rpc toggle")

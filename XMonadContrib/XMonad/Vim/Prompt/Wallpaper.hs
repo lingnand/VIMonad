@@ -50,9 +50,10 @@ instance XPrompt WallpaperPrompt where
     showXPrompt (WPPrompt dir) = dir ++ " > "
     commandToComplete _ = id
     nextCompletion _ c l = let (cmd, arg) = splitArg c 
-                           in if cmd `isCmdPrefixOf` "setch"
+                               isChCompl = last l == "."
+                           in if cmd `isCmdPrefixOf` "setch" && isChCompl
                                  then "setch " ++ (l !! exactMatchIndex (unescape arg))
-                                 else if cmd `isCmdPrefixOf` "wallbase"
+                                 else if cmd `isCmdPrefixOf` "wallbase" && isChCompl
                                  then "wallbase " ++ (l !! exactMatchIndex (unescape arg))
                                  else  l !! exactMatchIndex cmd
                                     where exactMatchIndex a = case a `elemIndex` l of

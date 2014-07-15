@@ -39,18 +39,20 @@ instance XPrompt RPCPrompt where
                                         where args = parseArgs c
                                               firstArg = head args
                                               tailArgs = tail args
-                                              lastArg = if null tailArgs then "" else last tailArgs
+                                              lastArg = last args
+                                              lastChArg = if null tailArgs then "" else lastArg
                                               compls 
-                                                | firstArg `isPrefixOf` rpcBitRate && (head l) `elem` rpcAllowedBitRates = "kbps " ++ (l !! exactMatchIndex)
-                                                | firstArg `isPrefixOf` rpcSetch = "setch " ++ (head $ parseArgs (l !! nextChNumMatchIndex))
+                                                | firstArg `isCmdPrefixOf` rpcBitRate && (head l) `elem` rpcAllowedBitRates = "kbps " ++ (l !! exactMatchIndex)
+                                                -- the first channel completion should contain '999' the personal channel
+                                                | firstArg `isCmdPrefixOf` rpcSetch && "999" `isInfixOf` (head l) = "setch " ++ (head $ parseArgs (l !! nextChNumMatchIndex))
                                                 | otherwise = skipLastWord c ++ (l !! exactMatchIndex)
                                               exactMatchIndex = case lastArg `elemIndex` l of
                                                                     Just i -> if i >= length l - 1 then 0 else i+1
                                                                     Nothing -> nextChFuzzyMatchIndex    
-                                              nextChNumMatchIndex = case findIndex (\s -> lastArg == (head $ parseArgs s)) l of
+                                              nextChNumMatchIndex = case findIndex (\s -> lastChArg == (head $ parseArgs s)) l of
                                                                         Just i -> if i >= length l - 1 then 0 else i+1
                                                                         Nothing -> nextChFuzzyMatchIndex    
-                                              nextChFuzzyMatchIndex = case findIndex (wordInside lastArg) l of
+                                              nextChFuzzyMatchIndex = case findIndex (wordInside lastChArg) l of
                                                                            Just i -> i
                                                                            Nothing -> 0
     highlightPredicate RPCPrompt cl cmd = first == lastArg
