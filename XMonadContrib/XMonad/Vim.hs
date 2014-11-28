@@ -1068,14 +1068,15 @@ mkDynamicPrompt' myModMask xpc statusCleanupCmd cimdb immediate final owi = init
                 , ((myModMask, xK_u), setInputAndDone "rpc ban")
                 , ((myModMask, xK_t), setInputAndDone "rpc toggle")
                 , ((myModMask, xK_s), setInput "rpc setch " >> endOfLine)
-                , ((myModMask, xK_x), setInputAndDone "rpc stop")
+                , ((myModMask, xK_x), setInputAndDone "rpc end")
                 , ((myModMask, xK_w), setInputAndDone "rpc webpage")
                 -- system related
                 -- suspend after one sec to avoid keyboard-mashing to wake up the machine again
-                , ((myModMask, xK_l), setInputAndDone "rpd-running && rpc stop; sudo systemctl suspend")
+                -- , ((myModMask, xK_l), setInputAndDone "sleep 1; systemctl suspend")
+                , ((myModMask, xK_l), setInputAndDone "rpd-running && rpc stop; ssh \"`hostusr`\" pmset sleepnow")
                 -- hot restart
-                , ((myModMask, xK_h), setInputAndDone "sudo reboot")
-                , ((myModMask, xK_q), setInputAndDone "sudo systemctl poweroff")
+                , ((myModMask, xK_h), setInputAndDone "reboot")
+                , ((myModMask, xK_q), setInputAndDone "systemctl poweroff")
                 -- , ((myModMask, xK_z), setInputAndDone "sleep 1; xset dpms force off")
                 -- run stuff on a terminal
                 , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xeval " ++ escapeQuery str)

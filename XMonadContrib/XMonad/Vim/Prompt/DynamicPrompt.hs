@@ -31,6 +31,7 @@ import XMonad.Vim.Prompt.Dict
 import XMonad.Vim.Constants
 import XMonad.Vim.Workspaces
 import XMonad.Vim.CIM
+import XMonad.Vim.Term
 import System.Directory
 import qualified Data.Map as M
 
@@ -147,7 +148,7 @@ dynamicPromptWidgets = [
       , dwgtDictMode modernCHSDMode "sdcv-modernChinese"
       , dwgtDictMode bigCHSDMode "sdcv-bigChinese"
       , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction'
-      , dwgt RPCPrompt "rpc" (\c -> rpcComplFunc) rpcAction'
+      , dwgt RPCPrompt "rpc" rpcComplFunc rpcAction'
       , dwgtMode CalcMode "calc"
     ]
 
@@ -336,7 +337,7 @@ dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir s
           p ["git", a] = gitcmdcmp a
           -- in all other instances we should give the log information
           p as@("git":_:_) = trycmp [output "git" $ ["log", "--grep", last as], scopecmp, shellcmp]
-          p _ =  trycmp [scopecmp, shellcmp]
+          p _ = trycmp [scopecmp, shellcmp]
 
 cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
 dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s = 
@@ -346,6 +347,7 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
     in case args of
         _ | Just (rest, w) <- findWidgetForAction s -> (promptAction w) immi final owi rest
         ['\'',pre]:pa:_ -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
+        "diff":pas -> runTerm "vimdiff" "vimdiff" $ "loader vimdiff " ++ joinStr " " pas
         "reboot":_ -> removeAllWorkspaces >> spawn "reboot"
         "systemctl":"poweroff":_ -> removeAllWorkspaces >> spawn "systemctl poweroff"
         ha:pas | ha `elem` ["cd", "c", "z"] -> chdir (if null pas then "" else unescape (head pas))
