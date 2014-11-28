@@ -1189,7 +1189,7 @@ workspaceCommands = concatMap (processKey . addPrefix) $
     [ (mk++"e", f)
     | (mk, f) <- [ ("", onNextNeighbour W.view)
                  , ("S-", onSelectedWindowsAfterMovingToTmpSpace $ \wins -> onNextNeighbour $ \t -> shiftWins t wins)
-                 , ("C-", onNextNeighbour W.view)]
+                 , ("C-", onNextNeighbour W.greedyView)]
     ]
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
 

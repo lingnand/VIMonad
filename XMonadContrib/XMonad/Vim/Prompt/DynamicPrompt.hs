@@ -244,7 +244,8 @@ trycmp (h:l) = do
        then return hl 
        else trycmp l
 
-dpromptComplFunc c cmds home hist cimdb myScriptsDir s
+dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir s
+    | null s, _:_ <- precompl = return precompl
     | (bef, _:pys) <- break (=='\\') s
     , pys =~ "^[a-z]+('[a-z]+)*$"
     , (py, _) <- break (=='\'') pys = do
@@ -335,7 +336,7 @@ dpromptComplFunc c cmds home hist cimdb myScriptsDir s
           p ["git", a] = gitcmdcmp a
           -- in all other instances we should give the log information
           p as@("git":_:_) = trycmp [output "git" $ ["log", "--grep", last as], scopecmp, shellcmp]
-          p _ = trycmp [scopecmp, shellcmp]
+          p _ =  trycmp [scopecmp, shellcmp]
 
 cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
 dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s = 
@@ -349,7 +350,7 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
         "systemctl":"poweroff":_ -> removeAllWorkspaces >> spawn "systemctl poweroff"
         ha:pas | ha `elem` ["cd", "c", "z"] -> chdir (if null pas then "" else unescape (head pas))
                | otherwise -> do
-                   let uha = unescape ha
+                   let uha = expandd home (unescape ha)
                    -- we need to determine the sort of thing to do with the dphandler
                    fe <- io (doesFileExist uha)
                    de <- io (doesDirectoryExist uha)
@@ -357,8 +358,11 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
                    if de || validDirShortcut uha
                       then chdir uha
                       else do
-                          let ha' = if null (trim s) then "." else s
-                              run = spawn $ myScriptsDir++"/dphandler" ++" "++ha'
+                          let mha = stripPrefix "sil " s
+                              silent = isJust mha
+                              aha = fromMaybe s mha
+                              ha' = if null (trim aha) then "." else aha
+                              run = myScriptsDir++"/dphandler" ++" "++ha'
                           if fe || de || '/' `elem` ha' || ('.' `elem` ha' && pas == []) || ha `elem` cmdsWithGUI
                              then do
                                   applyOnWindowsInserted owi {
@@ -367,9 +371,14 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
                                               (logFinished owi) a b
                                               final
                                       }
-                                  run 
-                                  immi
-                             else run >> follow
+                                  spawn run >> immi
+                             else do
+                                 -- we check if the user has silent as the first argument
+                                 if silent then spawn run >> follow
+                                           else do
+                                               let output pro ags = map (limitSpace outputWidth) . lines <$> (runProcessWithInput pro ags "")
+                                               precompl <- output "/bin/sh" ["-c", run ++ " 2>&1"]
+                                               dynamicPrompt' c cmds home history hist cimdb precompl immi final owi
                where chdir d = do
                          dir <- if null d
                                    then return home
@@ -377,7 +386,7 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
                                              "-" -> getCurrentWorkspaceOldDirectory
                                              p -> return p
                          saveCurrentWorkspaceDirectory dir
-                         dynamicPrompt' c cmds home history hist cimdb immi final owi
+                         dynamicPrompt' c cmds home history hist cimdb [] immi final owi
                      validDirShortcut d = d `elem` ["-"]
 
 divide' _ [] (r, w) = (reverse r, reverse w)
@@ -404,14 +413,14 @@ dynamicPrompt c cimdb immi final owi = do
     --     fasdd = fst $ unzip fasdd'
     --     fasdf = fst $ unzip fasdf'
     -- dynamicPrompt' c cmds home (absolute++relative)
-    dynamicPrompt' c cmds home history hist cimdb immi final owi
+    dynamicPrompt' c cmds home history hist cimdb [] immi final owi
 
-dynamicPrompt' c cmds home history hist cimdb immi final owi = do
+dynamicPrompt' c cmds home history hist cimdb precompl immi final owi = do
     d <- getCurrentWorkspaceDirectory
     io $ setCurrentDirectory d
     myScriptsDir <- io getMyScriptsDir
     -- only deal with directories or files at the moment; not doing check on the file / directories to save performance
-    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist cimdb myScriptsDir) (dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi) history
+    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir) (dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi) history
     return ()
 
 -- cycling between different dictionary
