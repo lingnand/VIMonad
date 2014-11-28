@@ -36,7 +36,7 @@ numberKeys = flip zip [1..] $ [""] ++ fmap ((++" ") . joinStr " " . fmap charToK
 
 getMyXMonadDir = getHomeDirectory >>= return . (++ "/.xmonad")
 getMyScriptsDir = getMyXMonadDir >>= return . (++"/scripts")
-getMyBitmapsDir = getMyXMonadDir >>= return . (++"/dzen2_retina")
+getMyBitmapsDir = getMyXMonadDir >>= return . (++"/dzen2")
 
 myTerminal = "xterm"
 

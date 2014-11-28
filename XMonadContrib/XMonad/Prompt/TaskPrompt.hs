@@ -94,26 +94,27 @@ instance XPrompt TaskWarriorPrompt where
         | isFilledOutput s = if isTaskIdLine s then taskIdFromLine s else if isUUIDLine s then uuidFromLine s else ""
         | isOpenLine s = indexFromOpenLine s
         | otherwise = s
-    nextCompletion TaskPrompt c l
-        | isFilledOutput headline = case tasklines of
-                [] -> c
-                _ | isTaskIdLine headTaskLine -> behinds ++ (argMatch nearest (head . words) tasklines)
-                  | isUUIDLine headTaskLine -> behinds ++ (argMatch nearest uuidFromLine tasklines)
-                  | otherwise -> c
-        | isOpenLine headline = skipLastWord c ++ (argMatch lastArg indexFromOpenLine l)
-        | otherwise = skipLastWord c ++ (argMatch lastArg id l)
-                 where lastArg = last $ parseArgs c
-                       headline = head l
-                        -- for task id matching
-                       tasklines = taskLines l
-                       headTaskLine = head tasklines
-                       (behinds , nearest) = lastId c  
-                       argMatch arg transArg ls = transArg  $ ls !! case findIndex ((== arg) . transArg) ls of
-                                                       Just i -> if i >= length ls - 1 then 0 else i+1
-                                                       Nothing -> case findIndex (wordInside arg) ls of
-                                                                       Just fi -> fi
-                                                                       Nothing -> 0
-    highlightPredicate TaskPrompt cl cmd 
+    nextCompletion TaskPrompt (c,_) l  = (nc', length nc')
+        where nc'
+                | isFilledOutput headline = case tasklines of
+                        [] -> c
+                        _ | isTaskIdLine headTaskLine -> behinds ++ (argMatch nearest (head . words) tasklines)
+                          | isUUIDLine headTaskLine -> behinds ++ (argMatch nearest uuidFromLine tasklines)
+                          | otherwise -> c
+                | isOpenLine headline = skipLastWord c ++ (argMatch lastArg indexFromOpenLine l)
+                | otherwise = skipLastWord c ++ (argMatch lastArg id l)
+                         where lastArg = last $ parseArgs c
+                               headline = head l
+                                -- for task id matching
+                               tasklines = taskLines l
+                               headTaskLine = head tasklines
+                               (behinds , nearest) = lastId c  
+                               argMatch arg transArg ls = transArg  $ ls !! case findIndex ((== arg) . transArg) ls of
+                                                               Just i -> if i >= length ls - 1 then 0 else i+1
+                                                               Nothing -> case findIndex (wordInside arg) ls of
+                                                                               Just fi -> fi
+                                                                               Nothing -> 0
+    highlightPredicate TaskPrompt cl (cmd,_)
         | isFilledOutput cl = if isTaskIdLine cl then lastVar == taskIdFromLine cl else if isUUIDLine cl then lastVar == uuidFromLine cl else False
         | isOpenLine cl = lastArg == indexFromOpenLine cl
         | otherwise = lastArg == cl

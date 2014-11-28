@@ -14,6 +14,7 @@ import XMonad.Prompt.Shell
 import Data.Char
 import Data.List
 import Data.List.Split
+import Control.Applicative
 import Text.Regex.Posix
 import XMonad.Hooks.DynamicLog
 import XMonad.Hooks.OnWindowsInserted
@@ -29,6 +30,7 @@ import XMonad.Vim.Prompt.Vimb
 import XMonad.Vim.Prompt.Dict
 import XMonad.Vim.Constants
 import XMonad.Vim.Workspaces
+import XMonad.Vim.CIM
 import System.Directory
 import qualified Data.Map as M
 
@@ -53,6 +55,14 @@ stripSuffix suf s = fmap reverse $ stripPrefix (reverse suf) (reverse s)
 isOutput = (>= outputWidth) . length
 limitSpace l str = take l $ str ++ repeat ' '
 
+try' f _ [] = Nothing
+try' f b (h:l) = maybe (try' f (h:b) l) Just (f (reverse b) h l)
+
+try:: ([a] -> a -> [a] -> Maybe b) -> [a] -> Maybe b
+try = flip try' []
+
+tryRev f l = try (\b i a -> f (reverse a) i (reverse b)) (reverse l)
+
 -- search widgets
 fasdLimit = 20
 findLimit = 20
@@ -62,23 +72,13 @@ whichLimit = 20
 historyLimit = 20
 evalLimit = 20
 topLimit = 40
+cimLowerLimit = 20
+cimUpperLimit = 50
 
 isGrepOutput s = isOutput s && ':' `elem` s
 stripGrepOutput = head . splitOn ":"
 isShortcutOutput s = length s > 2 && (s!!1) == ':'
 stripShortcutOutput = last . splitOn ":"
--- the index i is the i'th arg from the end
-isSearchFilter (i, s)
-    -- just not performance-wise up to the standard for fasd right now.
-    -- I have the feeling that the author hasn't done a terribly good job at optimizing this
-    -- | i > 0 && s `elem` ["f", "a", "d", "z"] = True
-    | i > 0 && s `elem` ["h", "l", "t", "which", "diff"] = True 
-    -- we let the application to decide what to do after that
-    | i > 0 && s `elem` ["g", "gp"] = True
-    | i == 0 && (length s) `elem` [1, 2] && head s == '\'' = True
-    -- | i > 0 && length s == 2 && head s == 'm' && not ((last s) `elem` "v") = True
-    | i > 0 && s == "diff" = True
-    | otherwise = False
 -- isStatDiffOutput = (=~ " +\\| +[0-9]+ [+-]+")
 isStatDiffOutput = (=~ " +\\| +[^ ]+ [^ ]+")
 stripStatDiffOutput = trim . head . splitOn "|" 
@@ -91,13 +91,21 @@ filterDiffOutput ls = case findIndex (isPrefixOf "--- ") ls of
                                 where fr = filterDiffOutput $ snd $ splitAt (i+2) ls
                                       cxt n m = isPrefixOf "+++ " (ls !! n) && isPrefixOf "index " (ls !! m)
                             _ -> []
+-- for cim
+breakCIMSuggestion s = case break (=='\'') s of
+                            (bef, _:ccs) | all (\c -> c >= 'a' && c <= 'z') bef, all (not . isAscii) ccs -> Just (bef, ccs)
+                            _ -> Nothing
+breakCIMSuggestions [] = Just []
+breakCIMSuggestions (h:l)
+    | Just r <- breakCIMSuggestion h, Just rs <- breakCIMSuggestions l = Just (r:rs)
+    | otherwise = Nothing
 
 data PromptWidget = PromptWidget { promptPrefix :: String
                                  , promptCommandToComplete :: String -> String
-                                 , promptNextCompletion :: String -> [String] -> String
+                                 , promptNextCompletion :: (String, Int) -> [String] -> (String, Int)
                                  , promptComplFunction :: XPConfig -> ComplFunction
                                  , promptAction :: X () -> X () -> OnWindowsInserted -> String -> X ()
-                                 , promptHighlightPredicate :: String -> String -> Bool
+                                 , promptHighlightPredicate :: String -> (String, Int) -> Bool
                                  }
 -- (prefix, commandToComplete, nextCompletion, complFunc, modeAction)
 dwgt p pre cf act = PromptWidget { promptPrefix = pre
@@ -107,7 +115,6 @@ dwgt p pre cf act = PromptWidget { promptPrefix = pre
                                  , promptAction = act
                                  , promptHighlightPredicate = highlightPredicate p
                                  }
-isWidgetFilter (i, s) = i > 0 && s `elem` (fmap promptPrefix dynamicPromptWidgets)
 widgetCmd w c = let p = promptPrefix w++" " in joinStr p $ tail $ splitOn p c
 findWidget pre = find ((==pre) . promptPrefix) dynamicPromptWidgets
 findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) $ fmap (\w -> (stripPrefix (promptPrefix w ++ " ") c, w)) dynamicPromptWidgets
@@ -150,187 +157,240 @@ evalStr s = let evalcomps = splitOn "`" s
             in if odd evallen && evallen >= 3 then (head evalcomps, head t, joinStr "`" $ tail t)
                                               else (s,"","")
 
-dpromptNextCompletion c l = let hl = any (flip dpromptHighlightPredicate c) l in
-                case dpromptBreak args of
-                   (_, "z":bef) | not hl -> joinStr " " $ reverse bef ++ ["c", escape (head l)]
-                   ([], ('\'':_):_) -> exactMatch $ fmap stripShortcutOutput l
-                   (_, "which":bef) | all ((`elem` "~/") . head) l && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
-                                    | otherwise -> exactMatch l
-                   (aft, "diff":bef) | not (null fdo) -> joinStr " " $ (case bef of
-                                                                            "git":bef' -> reverse bef'
-                                                                            _ -> reverse bef) ++ [escape (head fdo)]
-                   (_, w:bef) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
-                                                           in joinStr " " $ reverse bef ++ [w, promptNextCompletion wp (widgetCmd wp c) l]
-                   -- we have to specify manually so the 'm' case above when there is some sort of the string on its right would sift through here
-                   (_, f:bef) | f `elem` ["f", "a", "d", "h", "l", "t", "which"] && not hl -> joinStr " " $ reverse bef ++ [escape (head l)]
-                   _ | all isGrepOutput l -> joinStr " " $ takeWhile (\t -> t /="g" && t /= "gp") (init args) ++ case exactNext $ fmap stripGrepOutput l of
-                                                                                          [] -> []
-                                                                                          s -> [s]
-                     | all isShortcutOutput l -> exactMatch $ fmap stripShortcutOutput l
-                     | not (null fsdo) && (length fsdo) `elem` [length l, length l - 1] -> exactMatch $ fmap stripStatDiffOutput fsdo
-                     | not (null fdo) -> exactMatch fdo
-                     | not (null evalstr) ->  evall ++ escape (head l) ++ evalr
-                     | all isOutput l && any ("commit" `isPrefixOf`) l && any ("Author" `isPrefixOf`) l && any ("Date" `isPrefixOf`) l -> exactMatch $ fmap (fromJust . stripPrefix "commit " . trim) $ filter ("commit " `isPrefixOf`) l
-                     | isOutput (head l) -> c
-                     | otherwise -> exactMatch l
-             where lastArg = last $ args
-                   args = parseShellArgs c
-                   (evall, evalstr, evalr) = evalStr c
-                   fdo = filterDiffOutput l
-                   fsdo = filter isStatDiffOutput l
-                   exactMatch ls = fromMaybe "" (stripSuffix lastArg c) ++ exactNext ls
-                   exactNext ls = let rev = reverse ls in escape $ rev !! case findIndex (== unescape lastArg) rev of
-                               Just i -> if i <= 0 then length ls - 1 else (i-1)
-                               Nothing -> length ls - 1 
+dpromptNextCompletion (c,os) l
+    -- for pinyin completion
+    -- the pattern .*([汉字]+|\\)[a-z]+
+    -- when the chinese character has been completed as least once
+    | Just sugs <- breakCIMSuggestions l
+    , (bef, lat) <- splitAt os c, h:_ <- reverse bef, not (isAscii h)
+      -- try to strip the part from bef where we can find an exact match
+    , ((npy, nch), Just (py, rbef)) <- exactNext' (\(py, chs) -> let r = stripSuffix chs bef
+                                                                 in (isJust r, Just (py, fromJust r))) sugs
+    , Just aft' <- stripPrefix npy (py++lat)
+    -- strip leading / so that the user can trigger again
+    , aft <- fromMaybe aft' $ stripPrefix "'" aft' = let c' = rbef ++ nch ++ aft in (c', length c' - length aft)
+    -- this is when first completion a chinese character
+    | (bef, _:pys) <- break (=='\\') c
+    , pys =~ "^[a-z]+('[a-z]+)*$"
+    , (py, lat) <- break (=='\'') pys
+    , Just (spy, chs) <- breakCIMSuggestion (head l)
+    , Just r <- stripPrefix spy py, aft' <- r ++ lat
+    -- strip leading / so that the user can trigger again
+    , aft <- fromMaybe aft' $ stripPrefix "'" aft' = let c' = bef ++ chs ++ aft in (c', length c' - length aft)
+    | Just a <- tryRev rwp args = a
+    | Just a <- tryRev rp args = a
+    | all isGrepOutput l = eof . joinStr " " $ takeWhile (\t -> t /="g" && t /= "gp") (init args) 
+                                               ++ 
+                                               case exactNext $ stripGrepOutput <$> l of
+                                                   [] -> []
+                                                   s -> [s]
+    | all isShortcutOutput l = eof . exactMatch $ stripShortcutOutput <$> l
+    | fsdo@(_:_) <- filter isStatDiffOutput l, length l - length fsdo <= 1 = eof . exactMatch $ stripStatDiffOutput <$> fsdo
+    | fdo@(_:_) <- filterDiffOutput l = eof $ exactMatch fdo
+    | (evall, evalstr@(_:_), evalr) <- evalStr c =  eof $ evall ++ escape (head l) ++ evalr
+    | all isOutput l, any ("commit" `isPrefixOf`) l, any ("Author" `isPrefixOf`) l, any ("Date" `isPrefixOf`) l = eof . exactMatch $ fromJust . stripPrefix "commit " . trim <$> (filter ("commit " `isPrefixOf`) l)
+    | isOutput (head l) = eof c
+    | otherwise = eof $ exactMatch l
+    where hl = any (flip dpromptHighlightPredicate (c, length c)) l 
+          eof s = (s, length s) 
+          args = parseShellArgs c
+          lastArg = last $ args
+          exactMatch ls = fromMaybe "" (stripSuffix lastArg c) ++ exactNext ls
+          exactNext = escape . fst . exactNext' (\a -> (a == unescape lastArg, Nothing))
+          exactNext' p ls = let rev = reverse ls 
+                                ci [] = (rev !! (length ls - 1), Nothing)
+                                ci ((i, e):_) | (True, v) <- p e = (rev !! (if i <= 0 then length ls - 1 else (i-1)), v)
+                                ci (_:l) = ci l
+                            in ci $ zip [0..] rev
+          -- reverse widget processing
+          rwp bef w _ | Just wp <- findWidget w = let (wdg, wof) = promptNextCompletion wp (wcmd, length wcmd - length c + os) l
+                                                      wcmd = widgetCmd wp c
+                                                      diff = length wdg - wof
+                                                      fc = joinStr " " $ bef ++ [w, wdg]
+                                                  in Just (fc, length fc - diff) 
+          rwp _ _ _ = Nothing
+          -- other reverse processing
+          rp bef "z" _ | not hl = Just . eof . joinStr " " $ bef ++ ["c", escape (head l)]
+          rp _ ['\'', _] [] = Just . eof . exactMatch $ fmap stripShortcutOutput l
+          rp bef "which" _ | all ((`elem` "~/") . head) l, not hl = Just . eof . joinStr " " $ bef ++ [escape (head l)]
+                           | otherwise = Just . eof $ exactMatch l
+          rp bef "diff" _ | fdo@(_:_) <- filterDiffOutput l = Just . eof . joinStr " " $ (case reverse bef of
+                                                                                              "git":bef' -> init bef
+                                                                                              _ -> bef) ++ [escape (head fdo)]
+          rp bef f _ | f `elem` ["f", "a", "d", "h", "l", "t", "which"], not hl = Just . eof . joinStr " " $ bef ++ [escape (head l)]
+          rp _ _ _ = Nothing
 
-dpromptHighlightPredicate cl cmd = case dpromptBreak args of
-                (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
-                                                      in promptHighlightPredicate wp cl (widgetCmd wp cmd)
-                _ | isGrepOutput cl -> stripGrepOutput cl == unescapedLastArg
-                  | isShortcutOutput cl -> stripShortcutOutput cl == unescapedLastArg
-                  | not (null unescapedLastArg) && ("--- a/"++unescapedLastArg) `isPrefixOf` cl -> True
-                  | isStatDiffOutput cl -> stripStatDiffOutput cl == unescapedLastArg
-                  | trimcl =~ "commit [0-9a-z]{40}" -> last (words trimcl) == unescapedLastArg
-                  | isOutput cl -> False
-                  | otherwise -> not (null args) && unescapedLastArg == cl 
-             where args = parseShellArgs cmd
-                   unescapedLastArg = unescape $ last args 
-                   trimcl = trim cl
+dpromptHighlightPredicate cl (cmd,os)
+    -- CIM highlight
+    | Just (py, chs) <- breakCIMSuggestion cl = isJust $ stripSuffix chs (take os cmd)
+    | Just p <- tryRev rwp args = p
+    | isGrepOutput cl = stripGrepOutput cl == unescapedLastArg
+    | isShortcutOutput cl = stripShortcutOutput cl == unescapedLastArg
+    | not (null unescapedLastArg), ("--- a/"++unescapedLastArg) `isPrefixOf` cl = True
+    | isStatDiffOutput cl = stripStatDiffOutput cl == unescapedLastArg
+    | trimcl <- trim cl, trimcl =~ "commit [0-9a-z]{40}" = last (words trimcl) == unescapedLastArg
+    | isOutput cl = False
+    | otherwise = not (null args) && unescapedLastArg == cl 
+    where args = parseShellArgs cmd
+          unescapedLastArg = unescape $ last args 
+          -- reverse widget process
+          rwp _ w _ | Just wp <- findWidget w, wcmd <- widgetCmd wp cmd = Just $ promptHighlightPredicate wp cl (wcmd, length wcmd - length cmd + os)
+          rwp _ _ _ = Nothing
 
--- given an array of arguments break it in such a way that it divides the necessary keyword with what is after 
-dpromptBreak args = 
-    -- we would first break from the beginning to see if any widget matches up
-    let stripIndex (a, b) = (fmap snd a, fmap snd b)
-        rev = zip [0..] $ reverse args
-    in case break isWidgetFilter rev of
-         (a, []) -> stripIndex $ break isSearchFilter rev
-         b -> stripIndex b
+trycmp [] = return []
+trycmp (h:l) = do
+    hl <- h
+    if not (null hl)
+       then return hl 
+       else trycmp l
 
-whenNull ma mb = do
-    l <- ma
-    if null l then mb else return l
+dpromptComplFunc c cmds home hist cimdb myScriptsDir s
+    | (bef, _:pys) <- break (=='\\') s
+    , pys =~ "^[a-z]+('[a-z]+)*$"
+    , (py, _) <- break (=='\'') pys = do
+        -- complete the pinyin by procedurally trying backwards
+        let trypy _ "" = return []
+            trypy limit w = do
+                l <- io $ wordList cimdb w
+                let r = zip (repeat w) l
+                    len = length l
+                if len < limit then return . (r++) =<< trypy (limit-len) (init w)
+                               else return r
+        fmap (\(w, c) -> w++"'"++c) . nubBy (\(_, a) (_, b) -> a == b) . take cimUpperLimit <$> trypy cimLowerLimit py
+    | Just a <- tryRev rwp args = a
+    | Just a <- tryRev rp args = a
+     -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
+    | (_, evalstr@(_:_), _) <- evalStr s = 
+        fmap sht . take evalLimit . lines <$> (runProcessWithInput "/bin/sh" ["-c", "loader " ++ escapeQuery evalstr] "")
+    | otherwise = p unescapedArgs 
+    where args = parseShellArgs s
+          unescapedArgs = map unescape args
+          sht = shortend home
+          epd = expandd home
+          sp = searchPredicate c
+          fasd args = fmap sht . lines <$> (runProcessWithInput (myScriptsDir++"/xfasd") (show fasdLimit:args) "")
+          sct pre = lines <$> (runProcessWithInput (myScriptsDir++"/xshortcut") [ "print", pre ] "")
+          ntailsp = length $ takeWhile isSpace (reverse s)
+          output pro ags = map (limitSpace outputWidth . sht) . lines <$> (runProcessWithInput pro ags "")
 
-dpromptComplFunc c cmds home hist myScriptsDir s = do
-        let args = parseShellArgs s
-            lastArg = if null args then "" else last args
-            unescapedArgs = map unescape args
-            sht = shortend home
-            shtout = fmap (fmap sht)
-            epd = expandd home
-            sp = searchPredicate c
-            fasd args = shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfasd") (show fasdLimit:args) ""
-            sct pre = fmap lines $ runProcessWithInput (myScriptsDir++"/xshortcut") [ "print", pre ] ""
-            ntailsp = length $ takeWhile isSpace (reverse s)
-            output pro ags = fmap (map (limitSpace outputWidth . sht) . lines) $ runProcessWithInput pro ags ""
-            (_,evalstr,_) = evalStr s
-            trycmp = foldl whenNull (return [])
-            scopecmp = case reverse unescapedArgs of
-                                   "":fa:_ | ntailsp == 1 -> output "scope" [epd fa, show outputWidth, show outputHeight, show outputHeight]
-                                   _ -> return [] 
-            shellcmp = let (scs, sas) = case head unescapedArgs of
-                                "man" -> (cmds, [])
-                                "du" -> ([], ["file"])
-                                "c" -> ([], ["directory"])
-                                "cd" -> ([], ["directory"])
-                                _ | length args > 1 -> ([], ["file"])
-                                  | otherwise -> (cmds, ["file"])
-                       in shellcmp' sas scs
-            shellcmp' sas scs = shtout $ getShellCompl' False sas scs $ epd lastArg
-            grepcmp' cmd aft = fmap (filter (':' `elem`)) $ output (myScriptsDir++"/"++cmd) $ show grepLimit:(fmap epd aft)
-            grepcmp = grepcmp' "xgrep"
-            pgrepcmp = grepcmp' "xpdfgrep"
-            gitcmdcmp args = return $ filter (sp args) ["add", "am", "archive", "bisect", "branch", "bundle", "checkout", "cherry-pick", "citool", "clean", "clone", "commit", "describe", "diff", "fetch", "format-patch", "gc", "grep", "gui", "init", "log", "merge", "mv", "notes", "pull", "rebase", "reset", "rm", "shortlog", "show", "stash", "status", "submodule", "tag"]
-        case dpromptBreak unescapedArgs of
-                    (afs, "f":_) -> fasd $ ["-f", "-B", "viminfo"] ++ (reverse afs)
-                    (afs, "d":_) -> fasd $ "-d" : (reverse afs)
-                    (afs, "a":_) -> fasd $ ["-a", "-B", "viminfo"] ++ (reverse afs)
-                    (afs, "z":_) -> fasd $ "-d" : (reverse afs)
-                    (afs, "h":_) -> return $ take historyLimit $ filter (sp $ joinStr " " $ reverse afs) $ hist
-                    -- marking interface
-                    (_:_, ('\'':pre):[]) -> shellcmp' ["directory"] []
-                    ([], ('\'':pre):_) -> sct pre
-                    (afs, "l":_) -> shtout $ fmap lines $ runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ reverse afs)) ""
-                    -- for g, we demand that at least SOME search term is entered, otherwise we don't generate the necessary output
-                    (af:afs, "g":_) -> trycmp $ (if afs == [] then [shellcmp' ["file"] []] else []) ++ [grepcmp (reverse $ af:afs)]
-                    (af:afs, "gp":_) | afs == [] -> shellcmp' ["file"] []
-                                     | not (null afs) && af == "" -> pgrepcmp (reverse $ af:afs)
-                    (afs, "t":_) -> getTagBin >>= \tagBin -> fmap (fmap (tagLibroot++) . lines) $ runProcessWithInput tagBin ([show tagLimit, "false"] ++ tagQuery (reverse afs)) ""
-                    (afs, "which":_) -> 
-                        let ha = head cas
-                            cas = reverse afs
-                        -- test if af is one of the commands
-                        in trycmp [shtout $ fmap lines $ runProcessWithInput "which" cas "", shtout $ return $ take whichLimit $ filter (sp $ joinStr " " cas) cmds]
-                    -- we need to make sure that we are using the current directory as a starting point
-                    (afs, "diff":_) | ntailsp <= 1 -> trycmp [output (myScriptsDir++"/xdiff") (show outputWidth:show outputHeight:diffargs), shellcmp' ["file"] []]
-                            where diffargs = if afs == [""] then [] else reverse afs
-                    (_, w:_) | isJust (findWidget w) -> let wp = fromJust $ findWidget w 
-                                                          in (promptComplFunction wp) c (widgetCmd wp s)
-                -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
-                    _ | not (null evalstr) -> shtout $ fmap (take evalLimit . lines) $ runProcessWithInput "/bin/sh" ["-c", "loader " ++ escapeQuery evalstr] ""
-                      | otherwise -> case unescapedArgs of
-                            "man":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xman") $ show outputWidth:show outputHeight:pa:pai:pas
-                            "du":pa:pai:pas | lastArg == "" -> output (myScriptsDir++"/xdu") $ show outputHeight:pa:pai:pas
-                            ["ip", pa] -> return $ filter (sp pa) ["addr", "addrlabel", "link", "maddr", "mroute", "neigh", "route", "rule", "tunnel"]
-                            "ip":pas | lastArg == "" -> output "ip" $ init pas
-                            ["top", ""] | ntailsp == 1-> output (myScriptsDir++"/xtop") [show topLimit]
-                            ["free", ""] | ntailsp == 1 -> output "free" []
-                            ["ifconfig", ""] | ntailsp == 1 -> output "ifconfig" []
-                            ("git":gitcmds) | gitcmds `elem` [[""], ["status", ""]] && ntailsp == 1 -> trycmp [output "git" ["status"], gitcmdcmp ""]
-                            -- only gives the prime command completion on three spaces
-                            ["git", pa] -> gitcmdcmp pa
-                            -- in all other instances we should give the log information
-                            "git":pa:_ -> trycmp [output "git" $ ["log", "--grep", last unescapedArgs], scopecmp, shellcmp]
-                            _ -> trycmp [scopecmp, shellcmp]
+          -- commands
+          scopecmp = case reverse unescapedArgs of
+                                 "":fa:_ | ntailsp == 1 -> output "scope" [epd fa, show outputWidth, show outputHeight, show outputHeight]
+                                 _ -> return [] 
+          shellcmp = let (scs, sas) = case head unescapedArgs of
+                              "man" -> (cmds, [])
+                              "du" -> ([], ["file"])
+                              "c" -> ([], ["directory"])
+                              "cd" -> ([], ["directory"])
+                              _ | length args > 1 -> ([], ["file"])
+                                | otherwise -> (cmds, ["file"])
+                     in shellcmp' sas scs
+          shellcmp' sas scs = fmap sht <$> (getShellCompl' False sas scs $ epd $ if null args then "" else last args)
+          grepcmp' cmd aft = filter (':' `elem`) <$> (output (myScriptsDir++"/"++cmd) $ show grepLimit:(epd <$> aft))
+          grepcmp = grepcmp' "xgrep"
+          pgrepcmp = grepcmp' "xpdfgrep"
 
+          -- the actual reverse process function (for widget)
+          rwp _ w _ | Just wp <- findWidget w = Just $ (promptComplFunction wp) c (widgetCmd wp s)
+          rwp _ _ _ = Nothing
+          -- the actual reverse process function (for non widget)
+          -- history
+          rp _ "h" afs = Just . return $ take historyLimit $ filter (sp $ joinStr " " $ unescape <$> afs) $ hist
+          -- marking interface
+          rp [] ('\'':pre) (_:_) = Just $ shellcmp' ["directory"] []
+          rp _ ('\'':pre) [] = Just $ sct pre
+          -- find
+          rp _ "l" afs = Just $ fmap sht . lines <$> (runProcessWithInput (myScriptsDir++"/xfind") (show findLimit:(fmap epd $ unescape <$> afs)) "")
+          -- for g, we demand that at least SOME search term is entered, otherwise we don't generate the necessary output
+          rp _ "g" (af:afs) = Just . trycmp $ (if afs == [] then [shellcmp' ["file"] []] else []) 
+                                              ++ 
+                                              [grepcmp (unescape <$> af:afs)]
+          rp _ "gp" [af] = Just $ shellcmp' ["file"] []
+          rp _ "gp" afs' | "":_:_ <- reverse afs' = Just . pgrepcmp $ unescape <$> afs'
+          -- tag
+          rp _ "t" afs = Just $ getTagBin >>= \tagBin -> fmap (tagLibroot++) . lines <$> (runProcessWithInput tagBin ([show tagLimit, "false"] ++ tagQuery (unescape <$> afs)) "")
+          -- which
+          rp _ "which" afs | cas <- unescape <$> afs = Just $ trycmp [fmap sht . lines <$> (runProcessWithInput "which" cas ""), 
+                                                                      return . fmap sht . take whichLimit $ filter (sp $ joinStr " " cas) cmds]
+          -- we need to make sure that we are using the current directory as a starting point
+          rp _ "diff" afs | ntailsp <= 1 = Just $ trycmp [output (myScriptsDir++"/xdiff") (show outputWidth:show outputHeight:diffargs), 
+                                                          shellcmp' ["file"] []]
+              where diffargs = case afs of
+                                [""] -> [] 
+                                _ -> unescape <$> afs
+          rp _ _ _ = Nothing
 
-cmdsWithGUI = ["chromium", "firefox", "xterm", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
-dpromptAction c cmds home history hist myScriptsDir immi final owi s = 
-        -- perform some special actions on some commands
-        let args = parseShellArgs s
-            follow = immi >> final
-        in case (findWidgetForAction s, args) of
-                (Just (rest, w), _) -> (promptAction w) immi final owi rest
-                (_, ('\'':pre:[]):pa:_) -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
-                (_, "reboot":_) -> removeAllWorkspaces >> spawn "reboot"
-                (_, "systemctl":"poweroff":_) -> removeAllWorkspaces >> spawn "systemctl poweroff"
-                (_, ha:pas) | ha `elem` ["cd", "c", "z"] -> do
-                                 d <- if null pas 
-                                         then return home 
-                                         else case head pas of
-                                                 "-" -> getCurrentWorkspaceOldDirectory
-                                                 p -> return $ unescape p
-                                 saveCurrentWorkspaceDirectory d
-                                 dynamicPrompt' c cmds home history hist immi final owi
-                            | otherwise -> do
-                                -- we need to determine the sort of thing to do with the dphandler
-                                fe <- io (doesFileExist ha)
-                                de <- io (doesDirectoryExist ha)
-                                let ha' = if null s then "." else s
-                                    run = spawn $ "loader " ++ myScriptsDir++"/dphandler" ++" "++ha'
-                                if fe || de || '/' `elem` ha' || ('.' `elem` ha' && pas == []) || ha `elem` cmdsWithGUI
-                                   then do
-                                        applyOnWindowsInserted owi {
-                                                  numberOfWindows = 1
-                                                , logFinished = \a b -> do
-                                                    (logFinished owi) a b
-                                                    final
-                                            }
-                                        run 
-                                        immi
-                                   else run >> follow
-                                
+          gitcmdcmp a = return $ filter (sp a) ["add", "am", "archive", "bisect", "branch", "bundle", "checkout", "cherry-pick", "citool", "clean", "clone", "commit", "describe", "diff", "fetch", "format-patch", "gc", "grep", "gui", "init", "log", "merge", "mv", "notes", "pull", "rebase", "reset", "rm", "shortlog", "show", "stash", "status", "submodule", "tag"]
+          -- the actual forward process function
+          p ["man", a, ""] = output (myScriptsDir++"/xman") [show outputWidth, show outputHeight, a]
+          p ["du", a, ""] = output (myScriptsDir++"/xdu") [show outputHeight, a]
+          p ["ip", a] = return $ filter (sp a) ["addr", "addrlabel", "link", "maddr", "mroute", "neigh", "route", "rule", "tunnel"]
+          p ["ip", a, ""] = output "ip" [a]
+          p ["top", ""] | ntailsp == 1 = output (myScriptsDir++"/xtop") [show topLimit]
+          p ["free", ""] | ntailsp == 1 = output "free" []
+          p ["ifconfig", ""] | ntailsp == 1 = output "ifconfig" []
+          -- git command
+          p ("git":gitcmds) | gitcmds `elem` [[""], ["status", ""]], ntailsp == 1 = trycmp [output "git" ["status"], gitcmdcmp ""]
+          -- only gives the prime command completion on two spaces
+          p ["git", a] = gitcmdcmp a
+          -- in all other instances we should give the log information
+          p as@("git":_:_) = trycmp [output "git" $ ["log", "--grep", last as], scopecmp, shellcmp]
+          p _ = trycmp [scopecmp, shellcmp]
+
+cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
+dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s = 
+    -- perform some special actions on some commands
+    let args = parseShellArgs s
+        follow = immi >> final
+    in case args of
+        _ | Just (rest, w) <- findWidgetForAction s -> (promptAction w) immi final owi rest
+        ['\'',pre]:pa:_ -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
+        "reboot":_ -> removeAllWorkspaces >> spawn "reboot"
+        "systemctl":"poweroff":_ -> removeAllWorkspaces >> spawn "systemctl poweroff"
+        ha:pas | ha `elem` ["cd", "c", "z"] -> chdir (if null pas then "" else unescape (head pas))
+               | otherwise -> do
+                   let uha = unescape ha
+                   -- we need to determine the sort of thing to do with the dphandler
+                   fe <- io (doesFileExist uha)
+                   de <- io (doesDirectoryExist uha)
+                    -- if the directory exists then we try to cd inside
+                   if de || validDirShortcut uha
+                      then chdir uha
+                      else do
+                          let ha' = if null (trim s) then "." else s
+                              run = spawn $ myScriptsDir++"/dphandler" ++" "++ha'
+                          if fe || de || '/' `elem` ha' || ('.' `elem` ha' && pas == []) || ha `elem` cmdsWithGUI
+                             then do
+                                  applyOnWindowsInserted owi {
+                                            numberOfWindows = 1
+                                          , logFinished = \a b -> do
+                                              (logFinished owi) a b
+                                              final
+                                      }
+                                  run 
+                                  immi
+                             else run >> follow
+               where chdir d = do
+                         dir <- if null d
+                                   then return home
+                                   else case d of
+                                             "-" -> getCurrentWorkspaceOldDirectory
+                                             p -> return p
+                         saveCurrentWorkspaceDirectory dir
+                         dynamicPrompt' c cmds home history hist cimdb immi final owi
+                     validDirShortcut d = d `elem` ["-"]
 
 divide' _ [] (r, w) = (reverse r, reverse w)
 divide' p (x:xs) (r, w) = divide' p xs $ if p x then (x:r, w) else (r, x:w)
 divide p l = divide' p l ([],[])
 
-dynamicPrompt c immi final owi = do
+dynamicPrompt c cimdb immi final owi = do
     cmds <- io getCommands
     home <- io $ env "HOME" "~"
     history <- io readHistory
     let histp = (=~ "^~?/")
         histf a z = (filter histp a) ++ z
-        hist = fmap unescape $ nub $ sort $ M.foldr histf [] history
+        hist = unescape <$> (nub $ sort $ M.foldr histf [] history)
     --     relative' = filter (\s -> isPrefixOf "./" s || isPrefixOf "../" s) hist
     -- relative <- filterM (\f -> do
     --         fe <- io $ doesFileExist f 
@@ -344,18 +404,18 @@ dynamicPrompt c immi final owi = do
     --     fasdd = fst $ unzip fasdd'
     --     fasdf = fst $ unzip fasdf'
     -- dynamicPrompt' c cmds home (absolute++relative)
-    dynamicPrompt' c cmds home history hist immi final owi
+    dynamicPrompt' c cmds home history hist cimdb immi final owi
 
-dynamicPrompt' c cmds home history hist immi final owi = do
+dynamicPrompt' c cmds home history hist cimdb immi final owi = do
     d <- getCurrentWorkspaceDirectory
     io $ setCurrentDirectory d
     myScriptsDir <- io getMyScriptsDir
     -- only deal with directories or files at the moment; not doing check on the file / directories to save performance
-    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist myScriptsDir) (dpromptAction c cmds home history hist myScriptsDir immi final owi) history
+    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist cimdb myScriptsDir) (dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi) history
     return ()
 
 -- cycling between different dictionary
-defaultDictionaries = ["sdcv-Collins", "sdcv-Moby", "sdcv-modernChinese", "sdcv-bigChinese"]
+defaultDictionaries = ["sdcv-Collins", "sdcv-Moby", "sdcv-bigChinese", "sdcv-modernChinese"]
 dpromptPrefices = defaultDictionaries ++ ["vb", "calc", "tk", "rpc"]
 cycleDictionaryForDPrompt dir = do
     str <- getInput

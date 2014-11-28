@@ -26,7 +26,7 @@ instance XPrompt StarDictMode where
         sdcvBin <- getSdcvBin
         fmap lines $ runProcessWithInput sdcvBin [d, s, sdLength] ""
     modeAction _ query _ = vbAction $ (if length (words query) <= 1 then "wt " else "d !tr ") ++ query
-    nextCompletion _ c _ =  c
+    nextCompletion _ (c,_) _ =  (c, length c)
     highlightPredicate _ _ _ = False
 defaultSDMode = SDMode "Collins Cobuild 5 > " "Collins Cobuild 5"
 mobySDMode = SDMode  "Moby Thesaurus II > " "Moby Thesaurus II"

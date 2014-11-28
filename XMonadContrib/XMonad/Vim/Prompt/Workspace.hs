@@ -23,18 +23,17 @@ data WorkspacePrompt = WorkspacePrompt String
 instance XPrompt WorkspacePrompt where
     showXPrompt (WorkspacePrompt s) = s ++ ": "
     commandToComplete _ = id
-    nextCompletion _ c l = if null l then "" else l !! case c `elemIndex` l of
-                                                       Just i -> if i >= length l - 1 then 0 else i + 1
-                                                       Nothing -> 0
+    nextCompletion _ (c,_) l = (c', length c')
+        where c' = if null l then "" else l !! case c `elemIndex` l of
+                       Just i -> if i >= length l - 1 then 0 else i + 1
+                       Nothing -> 0
 
 workspacePrompt :: XPConfig -> String -> (WorkspaceId -> String -> X ()) -> (String -> String -> X ()) -> X ()
 workspacePrompt conf p ef f = do 
     wts <- allWorkspaceTags
     wns <- fmap (fmap (\(a,b)->if null b then a else a++":"++b) . zip wts) allWorkspaceNames
     tagBin <- io getTagBin
-    let complFun s = if null extWns 
-               then fmap lines $ runProcessWithInput tagBin ([show tagLimit, "false", "-type", "d"] ++ tagQuery (words s)) ""
-               else return extWns
+    let complFun s = fmap ((extWns++) . lines) $ runProcessWithInput tagBin ([show tagLimit, "false", "-type", "d"] ++ tagQuery (words s)) ""
                where fil = filter (searchPredicate conf s)
                      extWns = fil wns 
     mkXPrompt (WorkspacePrompt p) conf complFun $ \s -> do

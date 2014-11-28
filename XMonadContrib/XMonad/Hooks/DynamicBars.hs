@@ -64,31 +64,35 @@ import qualified XMonad.Util.ExtensibleState as XS
 -- is called when the number of screens changes and on startup.
 --
 
+instance Eq XineramaScreenInfo where
+    (==) (XineramaScreenInfo a ax ay aw ah) (XineramaScreenInfo b bx by bw bh) = a == b && ax == bx && ay == by && aw == bw && ah == bh
+
 data DynStatusBarInfo = DynStatusBarInfo
-  { dsbInfoScreens :: [ScreenId]
+  { dsbInfoScreens :: [XineramaScreenInfo]
   , dsbInfoHandles :: [Handle]
   } deriving (Typeable)
 
 instance ExtensionClass DynStatusBarInfo where
   initialValue = DynStatusBarInfo [] []
 
-type DynamicStatusBar = ScreenId -> IO Handle
+type DynamicStatusBar = XineramaScreenInfo -> IO Handle
 type DynamicStatusBarCleanup = IO ()
 
-dynStatusBarStartup :: DynamicStatusBar -> DynamicStatusBarCleanup -> X ()
-dynStatusBarStartup sb cleanup = do
+dynStatusBarStartup :: DynamicStatusBar -> DynamicStatusBarCleanup -> X () -> X ()
+dynStatusBarStartup sb cleanup x = do
   liftIO $ do
       dpy <- openDisplay ""
       xrrSelectInput dpy (defaultRootWindow dpy) rrScreenChangeNotifyMask
       closeDisplay dpy
-  updateStatusBars sb cleanup
+  updateStatusBars sb cleanup x
 
-dynStatusBarEventHook :: DynamicStatusBar -> DynamicStatusBarCleanup -> Event -> X All
-dynStatusBarEventHook sb cleanup (RRScreenChangeNotifyEvent {}) = updateStatusBars sb cleanup >> return (All True)
-dynStatusBarEventHook _  _       _                              = return (All True)
+-- the added X () is triggered when actually the event fires
+dynStatusBarEventHook :: DynamicStatusBar -> DynamicStatusBarCleanup -> X () -> Event -> X All
+dynStatusBarEventHook sb cleanup x (RRScreenChangeNotifyEvent {}) = updateStatusBars sb cleanup x >> return (All True)
+dynStatusBarEventHook _  _       _ _                              = return (All True)
 
-updateStatusBars :: DynamicStatusBar -> DynamicStatusBarCleanup -> X ()
-updateStatusBars sb cleanup = do
+updateStatusBars :: DynamicStatusBar -> DynamicStatusBarCleanup -> X () -> X ()
+updateStatusBars sb cleanup x = do
   dsbInfo <- XS.get
   screens <- getScreens
   when (screens /= dsbInfoScreens dsbInfo) $ do
@@ -97,6 +101,7 @@ updateStatusBars sb cleanup = do
           cleanup
           mapM sb screens
       XS.put $ DynStatusBarInfo screens newHandles
+      x
 
 -----------------------------------------------------------------------------
 -- The following code is from adamvo's xmonad.hs file.
@@ -124,12 +129,10 @@ multiPP' dynlStr focusPP unfocusPP handles = do
     =<< mapM screenWorkspace (zipWith const [0 .. ] handles)
   return ()
 
-getScreens :: MonadIO m => m [ScreenId]
+-- we need a proper way of getting screen ids CORRECTLY
+getScreens :: MonadIO m => m [XineramaScreenInfo]
 getScreens = liftIO $ do
-  screens <- do
     dpy <- openDisplay ""
-    rects <- getScreenInfo dpy
+    msl <- xineramaQueryScreens dpy
     closeDisplay dpy
-    return rects
-  let ids = zip [0 .. ] screens
-  return $ map fst ids
+    return $ fromMaybe [] msl

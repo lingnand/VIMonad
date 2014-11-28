@@ -207,7 +207,8 @@ class XPrompt t where
     -- string presently in the command line and the list of
     -- completion.
     -- This function is not used when in multiple modes (because alwaysHighlight in XPConfig is True)
-    nextCompletion :: t -> String -> [String] -> String
+    -- An additional argument tells the prompt to shift the cursor to the given offset
+    nextCompletion :: t -> (String, Int) -> [String] -> (String, Int)
     nextCompletion = getNextOfLastWord
 
     -- | This method is used to generate the string to be passed to
@@ -242,12 +243,12 @@ class XPrompt t where
     modeAction _ _ _ = return ()
 
     -- | Given the completion item and the command string, whether it should be highlighted
-    highlightPredicate :: t -> String -> String -> Bool
+    highlightPredicate :: t -> String -> (String, Int) -> Bool
     highlightPredicate = highlightMatching 
 
 
 --- a highlightPredicate implementation (default)
-highlightMatching t item buffer = completionToCommand t item == commandToComplete t buffer
+highlightMatching t item (buffer,_) = completionToCommand t item == commandToComplete t buffer
 
 data XPPosition = Top
                 | Bottom
@@ -806,8 +807,8 @@ completionHandle c ks@(sym,_) (KeyEvent { ev_event_type = t, ev_state = m }) = d
             st <- get
             let updateState l = case alwaysHlight of
                   -- modify the buffer's value
-                  False -> let newCommand = nextCompletion (currentXPMode st) (command st) l
-                           in modify $ \s -> setCommand newCommand $ s { offset = length newCommand, highlightedCompl = Just newCommand}
+                  False -> let (newCommand, os) = nextCompletion (currentXPMode st) (command st, offset st) l
+                           in modify $ \s -> setCommand newCommand $ s { offset = os, highlightedCompl = Just newCommand}
                   --TODO: Scroll or paginate results
                   True -> let complIndex' = nextComplIndex st (length l)
                               highlightedCompl' = highlightedItem st { complIndex = complIndex'} c
@@ -854,7 +855,7 @@ tryAutoComplete = do
         Nothing    -> return False
   where runCompleted cmd delay = do
             st <- get
-            let new_command = nextCompletion (currentXPMode st) (command st) [cmd]
+            let (new_command, _) = nextCompletion (currentXPMode st) (command st, offset st) [cmd]
             modify $ setCommand "autocompleting..."
             updateWindows
             io $ threadDelay delay
@@ -1362,7 +1363,7 @@ printComplList d drw gc fc bc xs ys sss =
                      else (False, fc,bc)
                   False ->
                     -- compare item with buffer's value
-                    if highlightPredicate (currentXPMode st) item (command st)
+                    if highlightPredicate (currentXPMode st) item (command st, offset st)
                     then (True, fgHLight $ config st,bgHLight $ config st)
                     else (False, fc,bc)
             printStringXMF d drw (fontS st) gc f b x y item)
@@ -1469,20 +1470,22 @@ mkComplFunFromList' l s =
 -- | Given the prompt type, the command line and the completion list,
 -- return the next completion in the list for the last word of the
 -- command line. This is the default 'nextCompletion' implementation.
-getNextOfLastWord :: XPrompt t => t -> String -> [String] -> String
-getNextOfLastWord t c l = skipLastWord c ++ completionToCommand t (l !! ni)
+getNextOfLastWord :: XPrompt t => t -> (String, Int) -> [String] -> (String, Int)
+getNextOfLastWord t (c,_) l = (c', length c')
     where ni = case commandToComplete t c `elemIndex` map (completionToCommand t) l of
                  Just i -> if i >= length l - 1 then 0 else i + 1
                  Nothing -> 0
+          c' = skipLastWord c ++ completionToCommand t (l !! ni)
 
 -- | An alternative 'nextCompletion' implementation: given a command
 -- and a completion list, get the next completion in the list matching
 -- the whole command line.
-getNextCompletion :: String -> [String] -> String
-getNextCompletion c l = l !! idx
+getNextCompletion :: (String, Int) -> [String] -> (String, Int)
+getNextCompletion (c,_) l = (c', length c')
     where idx = case c `elemIndex` l of
                   Just i  -> if i >= length l - 1 then 0 else i + 1
                   Nothing -> 0
+          c' = l !! idx
 
 -- | Given a maximum length, splits a list into sublists
 splitInSubListsAt :: Int -> [a] -> [[a]]

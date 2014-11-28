@@ -62,6 +62,7 @@ import XMonad.Hooks.OnWindowsInserted
 import XMonad.Hooks.FadeInactive
 import XMonad.Hooks.FloatNext (runLogHook)
 import XMonad.Hooks.ManageDocks
+import XMonad.Hooks.DynamicBars
 import qualified XMonad.Hooks.UrgencyHook as U
 import XMonad.Vim.InsertPosition
 import XMonad.Vim.InsertOlder
@@ -85,6 +86,7 @@ import XMonad.Vim.TaskGroup
 import XMonad.Vim.QuickFind
 import XMonad.Vim.Repeat
 import XMonad.Vim.Macro
+import XMonad.Vim.CIM
 
 vimXPKeymap = emacsLikeXPKeymap' (\c -> not (isAlphaNum c) && c /= '_')
 selectIcon' = [[1,1,1,1,1,1,1,1,1,1],
@@ -236,7 +238,7 @@ instance Default VimStatusTheme where
                          , foregroundDimLight = "#505050"
                          }
 
-vimStatusLogHook colors@(VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor myFgHLight myFgDimLight) tgs h =  do
+vimStatusLogHook colors@(VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor myFgHLight myFgDimLight) tgs =  do
     myBitmapsDir <- io getMyBitmapsDir
     pp <- workspaceNamesPP $ def {
           ppCurrent     = dzenColor myTextHLight myBgColor
@@ -256,14 +258,14 @@ vimStatusLogHook colors@(VimStatusTheme myBgColor myFgColor myTextHLight myNotif
         , ppTitle       = wrap ("^fg(#222222)^i("++myBitmapsDir++"/corner_left.xbm)^bg(#222222)^fg(#4c7899)^fn(fkp)x^fn()") ("^fg(#222222)^i("++myBitmapsDir++"/corner_right.xbm)") .  dzenColor myFgColor "#222222" . shorten 120 . pad        
         , ppOrder   =  \(ws:l:t:hist:gp:hid:xs) -> [hist,ws,l,hid,gp] ++ xs ++ [t]
         , ppSort        = fmap (. filter ((/=scratchpadWorkspaceTag) . W.tag)) getSymbolStringSort
-        , ppOutput      = hPutStrLn h
         , ppExtras      = [  printLayoutInfo colors
                            , printGStack colors tgs
                            , printRegs colors tgs
                            ]
         } 
-    dynamicLogWithPP pp
-
+    -- dynamicLogWithPP pp
+    -- for the time being we will just use the same PP for any screen
+    multiPP pp pp
 
 printLayoutInfo (VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor _ _) = do
     s <- getMarkedWindowsSize
@@ -384,19 +386,13 @@ vimManageHook t = composeAll [
     , manageDocks
     ]
 
-vimStartupHook = do
-    wallpaperStartupHook
-    -- we will only need to switch to the right workspace during startup
-    curr <- currWorkspace
-    -- if not (validWS curr) then startTimer 0.5 >>= XS.put . StartWSChangeState else return ()
-    if not (validWS curr) then windows (W.view tmpWorkspaceTag) else return ()
 
 ---------------- Start workspace transition timer -- {{{
 -- due to some weird reasons the dzen bar refuses to be detected by the avoidStruts at startup. Resolution: switch to the right workspace after some delay (assuming that dzen has started up by that time
 
-data StartWSChangeState = StartWSChangeState TimerId deriving Typeable
-instance ExtensionClass StartWSChangeState where
-    initialValue = StartWSChangeState 0
+-- data StartWSChangeState = StartWSChangeState TimerId deriving Typeable
+-- instance ExtensionClass StartWSChangeState where
+--     initialValue = StartWSChangeState 0
 
 -- startWSSwitchHook e = do
 --     (StartWSChangeState t) <- XS.get                 
@@ -860,21 +856,22 @@ yankCommands xpc tgs = concatMap (processKey . addPrefix) $
            mapM_ unTag (W.integrate' gs))
     ]
 
-constructionKeys m xpc tgs = [ (filterKey g, \n ls lf -> do
-                                    onWindowsInserted n (\_ _ -> return ()) ls (\_ _ -> lf)
-                                    (construct g) n Nothing)
-                             | g <- allTaskGroupsWithFilterKey tgs ["c"]]
-                             ++
-                             [ ("/", \n l lf -> do
-                                     let base x = mkDynamicPrompt' m xpc (return ()) (return ()) $ OnWindowsInserted 1 (\_ _ -> return ()) (\_ _ -> return ()) (\mf ls -> do
-                                         if not (null ls) then l mf $ head ls
-                                                          else return ()
-                                         x)
-                                     (!! n ) $ (iterate base lf)
-                               ) ]
+constructionKeys m xpc sc tgs cimdb = 
+    [ (filterKey g, \n ls lf -> do
+           onWindowsInserted n (\_ _ -> return ()) ls (\_ _ -> lf)
+           (construct g) n Nothing)
+    | g <- allTaskGroupsWithFilterKey tgs ["c"]]
+    ++
+    [ ("/", \n l lf -> do
+            let base x = mkDynamicPrompt' m xpc sc cimdb (return ()) (return ()) $ OnWindowsInserted 1 (\_ _ -> return ()) (\_ _ -> return ()) (\mf ls -> do
+                if not (null ls) then l mf $ head ls
+                                 else return ()
+                x)
+            (!! n ) $ (iterate base lf)
+      ) ]
 
 -- the change commands allow an extra X () that will be run AFTER the windows has been created
-changeCommands modKey xpc tgs = concatMap (processKey . addPrefix) $
+changeCommands modKey xpc sc tgs cimdb = concatMap (processKey . addPrefix) $
     [ (regk++mk++"c "++mt++ck, \immi final -> do
         -- first get the selection to be replaced
         (tgx, ls) <- xlst
@@ -889,7 +886,7 @@ changeCommands modKey xpc tgs = concatMap (processKey . addPrefix) $
             final
         immi
       )
-    | (ck, construct) <- constructionKeys modKey xpc tgs
+    | (ck, construct) <- constructionKeys modKey xpc sc tgs cimdb
     -- removed the numbers because that just explodes the number of keys enough to crash the system
     -- , (nk, n) <- numberKeys
     , (mk, mt, xlst) <- [ (mk', k', do
@@ -952,7 +949,7 @@ changeCommands modKey xpc tgs = concatMap (processKey . addPrefix) $
     , (gk, btio, atio) <- [ ("", return False, \_ -> return ())
                           , ("g ", toggleInsertOlder', putInsertOlder)]
     , (ipk, inp) <- insertPositionKeys
-    , (ck, construct) <- constructionKeys modKey xpc tgs
+    , (ck, construct) <- constructionKeys modKey xpc sc tgs cimdb
     , (regk, ta, add, _, _) <- [regUnnamedKey] ++ quoteRefed (regKeys ++ regPromptKeys' xpc "Cut windows to register: " "Add windows to register: ")
     ]
 
@@ -1054,38 +1051,38 @@ layoutCommands tgs =
     , ("M-S-t", runManageHookOnFocused $ (windowStyle $ contextualGroup tgs) Prev)
     ]
 
-myKillCmd = "killall dzen2 conky;"
-myRestartCmd = myKillCmd ++ "xmonad --restart"
-mkDynamicPrompt' myModMask xpc immediate final owi = initMatches >>= \r -> dynamicPrompt (xpc r) { 
+mkDynamicPrompt' myModMask xpc statusCleanupCmd cimdb immediate final owi = initMatches >>= \r -> dynamicPrompt (xpc r) { 
               changeModeKey = xK_VoidSymbol
             , searchPredicate = repeatedGrep
             , promptKeymap = M.fromList $ (M.toList $ vimXPKeymap r)++[
                   ((myModMask, xK_b), addOrTruncateTillPrefix "vb ")
                 , ((myModMask, xK_c), addOrTruncateTillPrefix "calc ")
                 , ((myModMask, xK_k), addOrTruncateTillPrefix "tk ")
-                , ((myModMask .|. controlMask, xK_d), cycleDictionaryForDPrompt Prev)
+                -- shift + d
+                , ((myModMask .|. shiftMask, xK_D), cycleDictionaryForDPrompt Prev)
                 , ((myModMask, xK_d), cycleDictionaryForDPrompt Next)
                 -- fmd related
                 , ((myModMask, xK_r), addOrTruncateTillPrefix "rpc ")
                 , ((myModMask, xK_n), setInputAndDone "rpc next")
-                , ((myModMask, xK_a), setInputAndDone "rpc rate")
+                , ((myModMask, xK_a), setInputAndDone "[ \"`rpc info '%r'`\" = 1 ] && rpc unrate || rpc rate")
+                , ((myModMask, xK_u), setInputAndDone "rpc ban")
                 , ((myModMask, xK_t), setInputAndDone "rpc toggle")
                 , ((myModMask, xK_s), setInput "rpc setch " >> endOfLine)
+                , ((myModMask, xK_x), setInputAndDone "rpc stop")
                 , ((myModMask, xK_w), setInputAndDone "rpc webpage")
                 -- system related
                 -- suspend after one sec to avoid keyboard-mashing to wake up the machine again
-                , ((myModMask, xK_l), setInputAndDone "sleep 1; systemctl suspend")
+                , ((myModMask, xK_l), setInputAndDone "rpd-running && rpc stop; sudo systemctl suspend")
                 -- hot restart
-                , ((myModMask, xK_h), setInputAndDone "reboot")
-                , ((myModMask, xK_q), setInputAndDone myRestartCmd)
-                , ((myModMask, xK_x), setInputAndDone "systemctl poweroff")
-                , ((myModMask, xK_z), setInputAndDone "sleep 1; xset dpms force off")
+                , ((myModMask, xK_h), setInputAndDone "sudo reboot")
+                , ((myModMask, xK_q), setInputAndDone "sudo systemctl poweroff")
+                -- , ((myModMask, xK_z), setInputAndDone "sleep 1; xset dpms force off")
                 -- run stuff on a terminal
-                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xterm -e zsh -ic " ++ escapeQuery (str ++ "; zsh"))
-            ]} immediate final owi
-mkDynamicPrompt m xpc i f = mkDynamicPrompt' m xpc i f def
+                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xeval " ++ escapeQuery str)
+            ]} cimdb immediate final owi
+mkDynamicPrompt m xpc sc cimdb i f = mkDynamicPrompt' m xpc sc cimdb i f def
 
-dynamicPromptCommand m xpc = ("M-r", mkDynamicPrompt m xpc) 
+dynamicPromptCommand m xpc sc cimdb = ("M-r", mkDynamicPrompt m xpc sc cimdb) 
 
 promptCommands xpc =
     [ ("M-"++mf++"/", \immi final -> initMatches >>= \r -> mkSearchPrompt (xpc r) {searchPredicate = repeatedGrep} p validWindow (a immi final))
@@ -1105,7 +1102,7 @@ promptCommands xpc =
     | af <- ["S-c"] ]
     ++
     [ ("M-"++mf++"s "++nk++mk++af, fun)
-    | (mf, action, prompt) <- [ ("", windows . W.greedyView, "workspace")
+    | (mf, action, prompt) <- [ ("", windows . W.view, "workspace")
                               , ("S-", \t -> onSelectedWindowsAfterMovingToTmpSpace $ \wins ->  windows (shiftWins t wins), "move to workspace") ]
     , (af, pos) <- insertPositionKeys
     , (nk, n) <- numberKeys
@@ -1144,15 +1141,22 @@ miscCommands myModMask xpc toggleFadeSet =
       )
     ----- wallpaper invoke -- {{{
     , ("M-z", initMatches >>= \r -> mkWPPrompt toggleFadeSet (xpc r) {
-          autoComplete = Just 0
-        , searchPredicate = repeatedGrep
+          searchPredicate = repeatedGrep
+        , promptKeymap = M.fromList $ (M.toList $ vimXPKeymap r)++[
+              ((myModMask, xK_n), setInputAndDone "next")
+            , ((myModMask, xK_a), setInputAndDone "rate")
+            , ((myModMask, xK_s), addOrTruncateTillPrefix "setch ")
+            , ((myModMask, xK_f), addOrTruncateTillPrefix "flickr ")
+            , ((myModMask, xK_u), setInputAndDone "ban")
+            , ((myModMask, xK_t), setInputAndDone "trash")
+        ]
     })
     ]
 
 workspaceCommands = concatMap (processKey . addPrefix) $
     -- workspace prompt interface
     [ (pk++mk++wk, gt >>= flip whenJust ta) 
-    | (mk, ta) <- [ ("", windows . W.greedyView)
+    | (mk, ta) <- [ ("", windows . W.view)
                   , ("S-", \t -> onSelectedWindowsAfterMovingToTmpSpace $ \wins ->  windows (shiftWins t wins)) 
                   , ("C-", swapWith)
                   ]  
@@ -1175,17 +1179,17 @@ workspaceCommands = concatMap (processKey . addPrefix) $
     ]
     -- the find motion (just for completeness)
     ++
-    [ ("f M-"++charToKeyStroke t, quickWorkspace [t] >>= windows . W.greedyView) 
+    [ ("f M-"++charToKeyStroke t, quickWorkspace [t] >>= windows . W.view) 
     | t <- symbolSequence ]
     ++
     -- workspace motion key g M-S-0 and g M-S-4
-    [ ("g M-0", allWorkspaceTags >>= windows . W.greedyView . head)
-    , ("g M-S-4", allWorkspaceTags >>= windows . W.greedyView . last) ]
+    [ ("g M-0", allWorkspaceTags >>= windows . W.view . head)
+    , ("g M-S-4", allWorkspaceTags >>= windows . W.view . last) ]
     ++
     [ (mk++"e", f)
     | (mk, f) <- [ ("", onNextNeighbour W.view)
                  , ("S-", onSelectedWindowsAfterMovingToTmpSpace $ \wins -> onNextNeighbour $ \t -> shiftWins t wins)
-                 , ("C-", onNextNeighbour W.greedyView)]
+                 , ("C-", onNextNeighbour W.view)]
     ]
     {-, ("M-S-f", withFocused $ io . modifyIORef toggleFadeSet . toggleFadeOut)-}
 
@@ -1259,6 +1263,7 @@ delete add register ls = if register == "" then killWindows ls else cut add regi
 yank add register ls = do
     putWindowsIntoRegister add register ls 
     putWindowsIntoRegister False "\"" ls 
+    refresh
 
 mvWindows nr fun wins = do
     rep <- orderedWindowsMatchingPredicate (hasTagQuery nr) 
@@ -1276,8 +1281,8 @@ appendablize (k, ka) = (k, \immi final -> ka >> immi >> final)
 appendImmediate f (k, ka) = (k, \immi final -> ka (f >> immi) final)
 normalize = fmap (\(k, ka) -> (k, ka (return ()) (return ())))
 -- this is the version that allows for appending an action when the designed action has finished
-myAppendableKeys :: KeyMask -> (HistoryMatches -> XPConfig) -> [TaskGroup] -> [(String, X ())] -> IORef (S.Set Window) -> [(String, X () -> X () -> X ())]
-myAppendableKeys m xpc t additionalKeys toggleFadeSet =
+myAppendableKeys :: KeyMask -> (HistoryMatches -> XPConfig) -> String -> [TaskGroup] -> CIMDb -> [(String, X ())] -> IORef (S.Set Window) -> [(String, X () -> X () -> X ())]
+myAppendableKeys m xpc sc t cimdb additionalKeys toggleFadeSet =
     fmap (\(k, ka) -> flip appendImmediate (k, ka) $ appendMacroKey k)
        (fmap appendablize (visualCommands ++ motionKeyCommands xpc t)
         ++
@@ -1285,7 +1290,7 @@ myAppendableKeys m xpc t additionalKeys toggleFadeSet =
            (fmap appendablize (layoutCommands t ++ historyCommands t ++ miscCommands m xpc toggleFadeSet ++ additionalKeys ++ workspaceCommands)
             -- dynamic prompt
             ++
-            [dynamicPromptCommand m xpc]
+            [dynamicPromptCommand m xpc sc cimdb]
             ++
             promptCommands xpc
             ++
@@ -1296,27 +1301,36 @@ myAppendableKeys m xpc t additionalKeys toggleFadeSet =
             fmap (\(k, ka) -> flip appendImmediate (k, ka) $ saveLastCommand $ ka (return ()) (return ()))
                (fmap appendablize (cutCommands xpc t ++ pasteCommands xpc ++ yankCommands xpc t)
                 ++
-                changeCommands m xpc t
+                changeCommands m xpc sc t cimdb
                )
            )
        )
 
 type VimLayout = ModifiedLayout WithBorder (ModifiedLayout AvoidStruts (ModifiedLayout (ConfigurableBorder Ambiguity) (G.Groups (G.Groups (ModifiedLayout Rename (ModifiedLayout (Decoration TabbedDecoration DefaultShrinker) Simplest)) (Choose (Mirror (ZoomRow GroupEQ)) Full)) (Choose (ZoomRow GroupEQ) Full))))
 
-viminize :: Theme -> (HistoryMatches -> XPConfig) -> VimStatusTheme -> Handle -> [TaskGroup] -> [(String, X ())] -> (XConfig l1) -> IO (XConfig VimLayout)
-viminize tabTheme xpc colors statusLogHandle tgs additionalKeys config = do
+-- the clean up hook meant to be called after each spawning/respawning of the task bar
+cleanupHook :: X ()
+cleanupHook = do
+    wallpaperStartupHook
+    -- curr <- currWorkspace
+    -- we will only need to switch to the right workspace during startup
+    -- if not (validWS curr) then startTimer 0.5 >>= XS.put . StartWSChangeState else return ()
+    -- if not (validWS curr) then windows (W.view tmpWorkspaceTag) else return ()
+
+viminize :: Theme -> (HistoryMatches -> XPConfig) -> VimStatusTheme -> DynamicStatusBar -> String -> [TaskGroup] -> CIMDb -> [(String, X ())] -> (XConfig l1) -> IO (XConfig VimLayout)
+viminize tabTheme xpc colors dsb sc tgs cimdb additionalKeys config = do
     toggleFadeSet <- newIORef S.empty
-    let keys = myAppendableKeys m xpc tgs additionalKeys toggleFadeSet
+    let keys = myAppendableKeys m xpc sc tgs cimdb additionalKeys toggleFadeSet
         m = modMask config
     macroCommands <- retrieveMacroCommands keys $ \r -> (xpc r) {
                          searchPredicate = prefixSearchPredicate
                      }
     return $ config {
-                  logHook = (logHook config) >> vimLogHook toggleFadeSet >> vimStatusLogHook colors tgs statusLogHandle
+                  logHook = (logHook config) >> vimLogHook toggleFadeSet >> vimStatusLogHook colors tgs
                 , manageHook = composeAll [vimManageHook tgs, manageHook config]
-                , handleEventHook = (handleEventHook config) <+> (vimHandleEventHook m)
-                , startupHook = startupHook config >> vimStartupHook
+                , handleEventHook = (handleEventHook config) <+> (vimHandleEventHook m) <+> dynStatusBarEventHook dsb (spawn sc) cleanupHook
+                , startupHook = startupHook config >> dynStatusBarStartup dsb (spawn sc) cleanupHook
                 , layoutHook = noBorders . avoidStruts . lessBorders Screen $ vimLayout tabTheme tgs
                 , terminal = myTerminal
-                , workspaces = [scratchpadWorkspaceTag, tmpWorkspaceTag]
+                , workspaces = workspaces config
            } `additionalKeysP` ((normalize keys) ++ macroCommands ++ macroRemapCommands keys tgs)

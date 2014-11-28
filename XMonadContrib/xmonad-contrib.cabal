@@ -67,7 +67,10 @@ library
                        random,
                        regex-posix,
                        split,
-                       text
+                       text,
+                       bytestring,
+                       text-icu,
+                       BerkeleyDB
     else
         build-depends: base < 3
 
@@ -332,6 +335,7 @@ library
                         XMonad.Vim.InsertPosition
                         XMonad.Vim.InsertOlder
                         XMonad.Vim.Minimize
+                        XMonad.Vim.CIM
                         XMonad.Vim.Prompt.Calc
                         XMonad.Vim.Prompt.Vimb
                         XMonad.Vim.Prompt.Dict

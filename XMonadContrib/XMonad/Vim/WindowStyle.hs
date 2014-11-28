@@ -39,8 +39,8 @@ windowStyleFromList ls dir
     
 lowerHalfRectHook = customFloating $ W.RationalRect (0) (1/2) (1) (1/2)
 upperHalfRectHook = customFloating $ W.RationalRect (0) (0) (1) (1/2)
-rightPanelHook = customFloating $ W.RationalRect (4/5) (14/900) (1/5) (1-14/900)
-leftPanelHook = customFloating $ W.RationalRect (0) (14/900) (1/5) (1-14/900)
+rightPanelHook = customFloating $ W.RationalRect (4/5) (16/1200) (1/5) (1-16/1200)
+leftPanelHook = customFloating $ W.RationalRect (0) (16/1200) (1/5) (1-16/1200)
 
 runManageHook :: ManageHook -> Window -> X ()
 runManageHook mh = windows . appEndo <=< runQuery mh

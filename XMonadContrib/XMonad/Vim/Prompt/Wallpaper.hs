@@ -22,6 +22,7 @@ import qualified Data.Set as S
 import XMonad.Hooks.FadeInactive
 import XMonad.Vim.Workspaces
 import Control.Monad
+import Control.Applicative
 import Data.IORef
 
 changeWallpaperBin = "wallpaper-change"
@@ -35,7 +36,7 @@ wallpaperOpenBin = "feh"
 defaultFadeInactiveAmount = 0.85
 wallpaperFadeFullAmount = 0.15
 
-defaultWPChannel = "#top"
+defaultWPChannel = "#standard"
 
 doNotFadeOutWindows =  className =? "xine" <||> className =? "MPlayer"
 
@@ -49,21 +50,21 @@ data WallpaperPrompt = WPPrompt String
 instance XPrompt WallpaperPrompt where
     showXPrompt (WPPrompt dir) = dir ++ " > "
     commandToComplete _ = id
-    nextCompletion _ c l = let (cmd, arg) = splitArg c 
-                               isChCompl = last l == "."
-                           in if cmd `isCmdPrefixOf` "setch" && isChCompl
+    nextCompletion _ (c,_) l = (c', length c')
+                where c' = let (cmd, arg) = splitArg c 
+                           in if cmd `isCmdPrefixOf` "setch"
                                  then "setch " ++ (l !! exactMatchIndex (unescape arg))
-                                 else if cmd `isCmdPrefixOf` "wallbase" && isChCompl
-                                 then "wallbase " ++ (l !! exactMatchIndex (unescape arg))
+                                 else if cmd `isCmdPrefixOf` "wallhaven"
+                                 then "wallhaven " ++ (l !! exactMatchIndex (unescape arg))
                                  else  l !! exactMatchIndex cmd
                                     where exactMatchIndex a = case a `elemIndex` l of
                                                                     Just i -> if i >= length l - 1 then 0 else i+1
                                                                     Nothing -> 0    
     -- only check on the last word
-    highlightPredicate _ cl cmd = let lastArg = case splitArg cmd of
+    highlightPredicate _ cl (cmd,_) = let lastArg = case splitArg cmd of
                                                     (a, "") -> a
                                                     (_, b) -> b
-                                  in unescape lastArg == cl
+                                    in unescape lastArg == cl
 
 data WallpaperChannel = WPChannel String deriving (Typeable, Show, Read)
 instance ExtensionClass WallpaperChannel where
@@ -78,39 +79,42 @@ instance ExtensionClass WallpaperChannel where
 ---- open: open the current wallpaper in feh
 wpComplFunc wallpaperDirectory conf str = 
     let (cmd, arg) = splitArg str
-    -- the setch command default to use the wallbase
-    in if cmd `isCmdPrefixOf` "setch" || cmd `isCmdPrefixOf` "wallbase"
+    -- the setch command default to use the wallhaven
+    in if cmd `isCmdPrefixOf` "setch" || cmd `isCmdPrefixOf` "wallhaven"
                 -- add in the . to denote the base wallpaper directory, and also to prevent auto complete 
-                then fmap ((\l -> if null l then l else l++["."]) 
-                   . filter (searchPredicate conf arg) 
-                   . sortBy (compareWithPriorList elemIndex ["#top", "#new", "#rand", "#favorites"]) 
-                   . map (\s -> fromMaybe s (stripPrefix wallpaperDirectory s)) . lines) 
-                   $ runProcessWithInput "find" [wallpaperDirectory, "-mindepth", "1", "-type", "d"] ""
-                else if cmd `isCmdPrefixOf` "flickr"
-                    then return []
-                    else return $ filter (isPrefixOf cmd) ["next", "setch", "flickr", "wallbase", "rate", "ban", "trash"]
+                then filter (searchPredicate conf arg)
+                   . sortBy (compareWithPriorList elemIndex ["#standard", "#favorites"])
+                   . map (\s -> fromMaybe s (stripPrefix wallpaperDirectory s)) 
+                   . lines <$> (runProcessWithInput "find" [wallpaperDirectory, "-mindepth", "1", "-type", "d"] "")
+                else return $ filter (isPrefixOf cmd) ["next", "setch", "flickr", "wallhaven", "rate", "ban", "trash"]
 
 replace st rep string = joinStr rep $ splitOn st string
 
 wpAction wallpaperDirectory c ch str = 
     let (cmd, arg) = splitArg str
         downloadch ess downloadscript = do
-               let changescript = "while [ -d "++ ess ++" ] && [ -z \"`find " ++ ess ++ " \\( -name '*.jpg' -o -name '*.png' \\) -print -quit 2>/dev/null`\" ]; do sleep 1; done"
+               let changescript = "while [ -d "++ ess ++" ] && [ -z \"`find " ++ ess ++ " \\( -name '*.jpg' -o -name '*.png' -o -name '*.gif' \\) -print -quit 2>/dev/null`\" ]; do sleep 1; done"
                runProcessWithInput "/bin/sh" ["-c", "mkdir -p " ++ ess] ""
                spawn $ downloadscript ++ "; rmdir " ++ ess
                runProcessWithInput "/bin/sh" ["-c", changescript] ""
-    in if cmd `isCmdPrefixOf` "setch" || cmd `isCmdPrefixOf` "wallbase"
+               return ()
+    in if cmd `isCmdPrefixOf` "setch" || cmd `isCmdPrefixOf` "wallhaven"
           then do
                 io $ setCurrentDirectory wallpaperDirectory
                 -- save the arg into the database
                 let ess = escapeQuery arg
                     exists = io $ doesDirectoryExist arg
                 e <- exists
-                if not e || "#" `isPrefixOf` arg || cmd `isCmdPrefixOf` "wallbase"
-                        -- transform the wallbase query 
-                       then let query = reverse $ takeWhile (/='/') $ reverse arg in
-                            downloadch ess $ "wallbase "++ escapeQuery query ++ " " ++ ess
-                       else return arg
+                let sorting
+                        -- if the directory doesn't exists then we download the most favorited images
+                        | not e = Just "favorites"
+                        -- if the user specifies wallhaven deliberately to redownload a directory we then use random sorting
+                        | cmd `isCmdPrefixOf` "wallhaven" = Just "random"
+                        | otherwise = Nothing
+                case sorting of
+                     Just s -> let query = reverse $ takeWhile (/='/') $ reverse arg in
+                               downloadch ess $ "wallhaven -d "++ ess ++ " -s " ++ s ++ " " ++ escapeQuery query 
+                     _ -> return ()
                 whenX (io $ doesDirectoryExist arg) $ do
                    XS.put $ WPChannel arg
                    spawn $ changeWallpaperCmd ++ " " ++ ess
@@ -135,14 +139,11 @@ wpAction wallpaperDirectory c ch str =
                             mkWPPrompt' c c
                         else
                             mkWPPrompt' c c
-          else do
-              case cmd of
-                "next" -> spawn $ changeWallpaperCmd ++ " ."
-                "rate" -> spawn $ changeWallpaperCmd ++ " -F"
-                "ban" -> spawn $ changeWallpaperCmd ++ " -D ."
+          else case cmd of
+                "next" -> spawn (changeWallpaperCmd ++ " .") >> mkWPPrompt' c c
+                "rate" -> spawn $ changeWallpaperCmd ++ " -F" 
+                "ban" -> spawn (changeWallpaperCmd ++ " -D .") >> mkWPPrompt' c c
                 _ -> return ()
-                -- reopen the wp prompt (chained)
-              mkWPPrompt' c c
 
 mkWPPrompt toggleFadeSet c = do
     fadeOutLogHook $ fadeIf (return True) wallpaperFadeFullAmount

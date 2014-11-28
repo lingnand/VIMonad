@@ -134,7 +134,7 @@ quickWorkspaceSequence = "`12345789"
 --- subgroup symbol sequence: we eliminated '`' due to its ugliness from the subgroup indexing stream; and note that the sub group doesn't necessarily need an index after all
 -- this is for tab keys
 subgroupSymbolSequence = "1234567890-="
-columngroupSymbolSequence = "123456789"
+columngroupSymbolSequence = "12345"
 indexToSymbol s n = if n >= 0 && n < length s then Just [s !! n] else Nothing
 subgroupIndexToSymbol = indexToSymbol $ fullSequence subgroupSymbolSequence
 
@@ -216,7 +216,7 @@ idleWorkspace allowIdle insp = do
            let (candi, insi, ch) = case (insp, findIndex ((== (W.tag curr)) . W.tag) wss) of
                                 (Before, Just i) -> (i-1, i, head currTag)
                                 (After, Just i) -> (i+1, i+1, nextSymbol $ head currTag)
-                                (Last, _) -> (length wss - 1, length wss, nextSymbol $ head $ W.tag $ last wss)
+                                (Last, _) -> (length wss - 1, length wss, nextSymbol $ head $ last $ tmpWorkspaceTag : fmap W.tag wss)
                                 _ -> (0, 0, nextSymbol $ head tmpWorkspaceTag)
                cand = wss !! candi
            if candi >= 0 && candi < length wss && p cand && allowIdle
@@ -244,27 +244,29 @@ removeAllWorkspaces = do
 removeWorkspaces cmd tags = do
     -- remove all windows
     wst <- workspaceStack
+    let wt = fmap (fmap W.tag) wst
     curr <- gets (W.currentTag . windowset)
-    let todel = filter (dp tags) $ W.integrate' wst
-        ntags = filter (/= tmpWorkspaceTag) tags
-        dp ts = (`elem` ts) . W.tag
-        nwst = maybeToMaybe (W.filter (not . dp ntags)) wst
+    allstags <- gets (filter (/= curr) . fmap (W.tag . W.workspace) . W.screens . windowset)
+    let todel = filter ((`elem` tags).W.tag) $ W.integrate' wst
+        (ttags, ntags) = partition (== tmpWorkspaceTag) tags
+        (stags, ftags) = partition (`elem` allstags) ntags
+        nwt = maybeToMaybe (W.filter (not . (`elem` ftags))) wt
     cmd $ concatMap (W.integrate' . W.stack) todel
-    case nwst of
-         Just (W.Stack nf _ _) | nft /= curr -> windows $ W.greedyView nft
-                where nft = W.tag nf
+    case nwt of
+         -- do a refilter and only view the workspace we are allowed to view
+         Just st | Just (W.Stack nf _ _) <- W.filter (not . (`elem` allstags)) st -> windows $ W.view nf
          _ -> return ()
     -- kill the scratchpads matching this workspace
     -- mapM_ (\t -> allOrderedWindowsMatchingPredicate (isPerWSScratchpadBoundToWS t) (mapM_ killWindow) (return ())) ntags
-    windows $ \s -> foldr removeWorkspaceByTag s ntags
-    renameWorkspaces (zip (fmap W.tag (W.integrate' nwst)) $ fmap wrapList $ symbolStream)
-    if length ntags < length tags then setWorkspaceNameByTag tmpWorkspaceTag "" >> saveWorkspaceDirectory "" tmpWorkspaceTag
-                                  else return ()
+    forM_ (ttags++stags) $ \t -> setWorkspaceNameByTag t "" >> saveWorkspaceDirectory "" t
+    windows $ \s -> foldr removeWorkspaceByTag s ftags
+    renameWorkspaces (zip (W.integrate' nwt) $ fmap wrapList $ symbolStream)
 
 -- assume that the workspace to be removed is in the hidden workspaces list
 removeWorkspaceByTag t s@(W.StackSet { W.hidden = hs })
-    = let (xs, y:ys) = break ((== t) . W.tag) hs
-      in s { W.hidden = xs ++ ys }
+    = case break ((== t) . W.tag) hs of
+           (xs, y:ys) -> s { W.hidden = xs ++ ys }
+           _ -> s
 
 renameWorkspaces ls = do
     WorkspaceHandles m <- XS.get

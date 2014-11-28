@@ -17,11 +17,12 @@ data VBPrompt = VBPrompt
 vbhistorySize = 10
 vbMatchSize = 10
 
-vbNextCompletion cmd ls = last $ words $ ls !! ni
-        where ni = case findIndex (vbIsEqualToCompletion cmd) ls of
+vbNextCompletion (cmd,_) ls = (c', length c')
+        where c' = last . words $ ls !! ni
+              ni = case findIndex (vbIsEqualToCompletion cmd) ls of
                       Just i -> if i >= length ls - 1 then 0 else i+1
                       Nothing -> 0 
-vbHighlightPredicate = flip vbIsEqualToCompletion
+vbHighlightPredicate cl (c,_) = vbIsEqualToCompletion c cl
 vbAction s = runShell $ "vb " ++ escapeQuery s
 ----- if it's empty then return the top 10 results from history
 vbComplFunc s
