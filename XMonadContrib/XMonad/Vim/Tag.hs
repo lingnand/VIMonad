@@ -7,7 +7,9 @@ module XMonad.Vim.Tag
 
 import XMonad.Vim.Constants
 import XMonad.Vim.Routine
+import Control.Monad.Trans
 
-getTagBin = getMyScriptsDir >>= return . (++"/xtag")
+getTagBin :: MonadIO m => m String
+getTagBin = getScriptsDir >>= return . (++"/xtag")
 tagLibroot = "~/DB/"
 tagQuery = prepend "-iwholename" . fmap (("*"++).(++"*"))

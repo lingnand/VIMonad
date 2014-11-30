@@ -108,7 +108,8 @@ rpcComplFunc c s
           arg = last args
           sp = searchPredicate c
 
-rpcAction' immi final owi s = 
+rpcAction' :: X () -> X () -> OnWindowsInserted -> Bool -> ((XPConfig -> XPConfig) -> [String] -> X () -> X () -> OnWindowsInserted -> X ()) -> String -> X ()
+rpcAction' immi final owi silent reprompt s = 
     let (cmd', arg) = splitArg s
         cmd = if cmd' `isCmdPrefixOf` rpcSetch 
                  then if all isSpace arg 
@@ -126,6 +127,6 @@ rpcAction' immi final owi s =
                        final
                } >> run >> immi
           else run >> immi >> final
-rpcAction = rpcAction' (return ()) (return ()) def
+rpcAction = rpcAction' (return ()) (return ()) def True (\_ _ immi final _ -> immi >> final)
 
 mkRPCPrompt c = mkXPrompt RPCPrompt c (rpcComplFunc c) rpcAction

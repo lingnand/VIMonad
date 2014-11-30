@@ -239,7 +239,7 @@ instance Default VimStatusTheme where
                          }
 
 vimStatusLogHook colors@(VimStatusTheme myBgColor myFgColor myTextHLight myNotifyColor myFgHLight myFgDimLight) tgs =  do
-    myBitmapsDir <- io getMyBitmapsDir
+    myBitmapsDir <- getBitmapsDir
     pp <- workspaceNamesPP $ def {
           ppCurrent     = dzenColor myTextHLight myBgColor
         , ppVisible     = dzenColor myFgHLight myBgColor
@@ -895,8 +895,8 @@ changeCommands modKey xpc sc tgs cimdb = concatMap (processKey . addPrefix) $
                                  tg = fmap fst $ target x
                              ls <- windowSelectionFromMotion x
                              return (Just $ if isJust simpx then fromJust simpx
-                                                            else if isJust tg then deminimizeFocus $ fromJust tg
-                                                            else return ()
+                                            else if isJust tg then deminimizeFocus $ fromJust tg
+                                            else return ()
                                     , ls)
                           )
                         | (k, xmt) <- argMotionKeys xpc tgs
@@ -1064,7 +1064,7 @@ mkDynamicPrompt' myModMask xpc statusCleanupCmd cimdb immediate final owi = init
                 -- fmd related
                 , ((myModMask, xK_r), addOrTruncateTillPrefix "rpc ")
                 , ((myModMask, xK_n), setInputAndDone "rpc next")
-                , ((myModMask, xK_a), setInputAndDone "[ \"`rpc info '%r'`\" = 1 ] && rpc unrate || rpc rate")
+                , ((myModMask, xK_a), setInputAndDone "sil [ \"`rpc info '%r'`\" = 1 ] && rpc unrate || rpc rate")
                 , ((myModMask, xK_u), setInputAndDone "rpc ban")
                 , ((myModMask, xK_t), setInputAndDone "rpc toggle")
                 , ((myModMask, xK_s), setInput "rpc setch " >> endOfLine)
@@ -1079,7 +1079,8 @@ mkDynamicPrompt' myModMask xpc statusCleanupCmd cimdb immediate final owi = init
                 , ((myModMask, xK_q), setInputAndDone "systemctl poweroff")
                 -- , ((myModMask, xK_z), setInputAndDone "sleep 1; xset dpms force off")
                 -- run stuff on a terminal
-                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xeval " ++ escapeQuery str)
+                , ((myModMask, xK_Return), changeInputAndDone $ \str -> "xeval " ++ escapeQuery (if null str then "." else str))
+                , ((controlMask, xK_Return), changeInputAndDone ("sil "++))
             ]} cimdb immediate final owi
 mkDynamicPrompt m xpc sc cimdb i f = mkDynamicPrompt' m xpc sc cimdb i f def
 

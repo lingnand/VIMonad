@@ -122,8 +122,8 @@ instance XPrompt TaskWarriorPrompt where
                         taskId = head $ words cl
                         (behinds , lastVar) = lastId cmd  
 
-taskAction' immi final owi s = 
-    let run = spawn $ "export EDITOR='xvim'; tk "++listCmdStrippedStr s++if noActionCmd then " open" else []
+taskAction' immi final owi silent reprompt s = 
+    let run = "export EDITOR='xvim'; tk "++listCmdStrippedStr s++if noActionCmd then " open" else ""
         wait = noActionCmd || head cmdAfter `elem` ["open", "note"]
     in if wait 
           then applyOnWindowsInserted owi {
@@ -131,13 +131,15 @@ taskAction' immi final owi s =
                 , logFinished = \a b -> do
                     (logFinished owi) a b
                     final
-            } >> run >> immi
-          else run >> immi >> final
+            } >> spawn run >> immi
+          else if silent then spawn run >> immi >> final
+          else do s <- runProcessWithInput "/bin/sh" ["-c", run] ""
+                  reprompt (\c -> c {defaultText = "tk "}) (map (fillSpace outputWidth) . lines $ s) immi final owi
     where noActionCmd = null cmdAfter
           (filters, cmdAfter) = break (\e -> e `elem` taskActionCmds++taskOtherCmds) $ parseArgs s
 -- check for the presence of action command, if there's no action command defaults to open the task
 -- we will strip away the list commands at all times. Reason: to support dynamic viewing, when you switch to a new view (through one of the list command), you can continue through the list and no need to delete back (essentially list commands become another kind of filter)
-taskAction = taskAction' (return ()) (return ()) def
+taskAction = taskAction' (return ()) (return ()) def True (\_ _ immi final _ -> immi >> final)
 
 listCmdStrippedStr c = tail $ foldr ((++) . (" "++)) [] (listCmdStrippedArgs $ parseArgs c)
 
@@ -193,8 +195,8 @@ taskFilterCompl args hasCmd =
                          | attribName =~ "^[0-9]+," -> taskExecute []
                         -- if there's command then return the attributes, otherwise if there's filter, return the actions, otherwise return list commands and attributes
                          | otherwise -> return $ filter (wordPrefixed attribName) $ if hasCmd then taskAttribs 
-                                                                                              else if not (null args) && not (null $ filter (\a -> not $ null a) (init args)) then taskAttribs++taskFilterCmds 
-                                                                                              else taskListCmds++taskActionCmds++taskAttribs
+                                                                                    else if not (null args) && not (null $ filter (\a -> not $ null a) (init args)) then taskAttribs++taskFilterCmds 
+                                                                                    else taskListCmds++taskActionCmds++taskAttribs
                        _ -> return []
              2 | nameIsPrefixOf "project" -> filterReturnFromTaskProcess attrib value $ (if hasCmd then [] else init args)++["_projects"] 
                | nameIsPrefixOf "priority" -> filterReturnFromFixedList attrib value ["H", "M", "L"]

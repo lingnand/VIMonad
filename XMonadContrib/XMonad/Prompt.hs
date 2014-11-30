@@ -625,7 +625,7 @@ getInput :: XP String
 getInput = gets command
 
 mkXPromptWithReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (String -> X a)  -> X (Maybe a)
-mkXPromptWithReturn t conf compl action = (io readHistory) >>= mkXPromptWithHistoryAndReturn t conf compl action
+mkXPromptWithReturn t conf compl action = (io readHistory) >>= mkXPromptWithHistoryAndReturn t conf compl (const action)
 
 -- | Same as 'mkXPrompt', except that the action function can have
 --   type @String -> X a@, for any @a@, and the final action returned
@@ -633,7 +633,7 @@ mkXPromptWithReturn t conf compl action = (io readHistory) >>= mkXPromptWithHist
 --   is yielded if the user cancels the prompt (by e.g. hitting Esc or
 --   Ctrl-G).  For an example of use, see the 'XMonad.Prompt.Input'
 --   module.
-mkXPromptWithHistoryAndReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (String -> X a) -> History  -> X (Maybe a)
+mkXPromptWithHistoryAndReturn :: XPrompt p => p -> XPConfig -> ComplFunction -> (History -> String -> X a) -> History  -> X (Maybe a)
 mkXPromptWithHistoryAndReturn t conf compl action hist = do
   XConf { display = d, theRoot = rw } <- ask
   s    <- gets $ screenRect . W.screenDetail . W.current . windowset
@@ -653,21 +653,22 @@ mkXPromptWithHistoryAndReturn t conf compl action hist = do
   if successful st' then do
     let
       prune = take (historySize conf)
+      newhist = M.insertWith
+                  (\xs ys -> prune . historyFilter conf $ xs ++ ys)
+                  (showXPrompt t)
+                  (prune $ historyFilter conf [command st'])
+                  hist
+                -- we need to apply historyFilter before as well, since
+                -- otherwise the filter would not be applied if
+                -- there is no history 
 
-    io $ writeHistory $ M.insertWith
-      (\xs ys -> prune . historyFilter conf $ xs ++ ys)
-      (showXPrompt t)
-      (prune $ historyFilter conf [command st'])
-      hist
-                                -- we need to apply historyFilter before as well, since
-                                -- otherwise the filter would not be applied if
-                                -- there is no history
+    io $ writeHistory newhist 
       --When alwaysHighlight is True, autocompletion is handled with indexes.
       --When it is false, it is handled depending on the prompt buffer's value
     let selectedCompletion = case alwaysHighlight (config st') of
           False -> command st'
           True -> fromMaybe (command st') $ highlightedCompl st' -- 
-    Just <$> action selectedCompletion
+    Just <$> action newhist selectedCompletion
     else return Nothing
 
 -- | Creates a prompt given:

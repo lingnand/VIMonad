@@ -24,7 +24,7 @@ dbOpen = do
     -- get the converter
     converter <- C.open "gbk" Nothing
     dbenv <- dbEnv_create []
-    dbEnv_open [DB_CREATE, DB_INIT_MPOOL] 0 dbenv =<< getMyXMonadDir 
+    dbEnv_open [DB_CREATE, DB_INIT_MPOOL] 0 dbenv =<< getXMonadDir 
     db <- db_create [] dbenv
     db_set_pagesize db 2048
     db_open [DB_RDONLY] DB_BTREE 0 db Nothing "gbk.bsddb" Nothing

@@ -15,12 +15,14 @@ module XMonad.Vim.Routine
     , processKey
     , addPrefix
     , logger
+    , runEvaluation
     ) where
 
 import Data.Char
 import Data.List
 import Data.Maybe
 import XMonad
+import XMonad.Vim.Constants
 import XMonad.Util.Run
 
 logger s = spawn $ "echo \"`date`: \"" ++ escapeQuery s ++ " >> ~/.xmonad/xmonad.log"
@@ -67,34 +69,6 @@ compareFileNames a b =
 
 wrapList c = [c]
 
-charToKeyStroke c = if isUpper c then "S-"++[toLower c]
-                                 else case c of
-                                           '!' -> "S-1"
-                                           '@' -> "S-2"
-                                           '#' -> "S-3"
-                                           '$' -> "S-4"
-                                           '%' -> "S-5"
-                                           '^' -> "S-6"
-                                           '&' -> "S-7"
-                                           '*' -> "S-8"
-                                           '(' -> "S-9"
-                                           ')' -> "S-0"
-                                           '_' -> "S--"
-                                           '+' -> "S-="
-                                           '|' -> "S-\\"
-                                           '~' -> "S-`"
-                                           '{' -> "S-["
-                                           '}' -> "S-]"
-                                           ':' -> "S-;"
-                                           '"' -> "S-'"
-                                           '<' -> "S-,"
-                                           '>' -> "S-."
-                                           '?' -> "S-/"
-                                           _ -> [c]
-
-joinStr delimit [] = ""
-joinStr delimit ls = foldl' ((++) . (++delimit)) (head ls) (tail ls)
-
 prepend _ [] = []
 prepend t (x:l) = t:x:(prepend t l)
 
@@ -125,3 +99,6 @@ processKey (k, a) =
     in [(k,a)] ++ if p /= k then [(p,a)] else []
 
 addPrefix (k, a) = ("M-"++k, a)
+
+-- bug: cannot contain pipe symbol which is wierd
+runEvaluation s = runProcessWithInput "/bin/sh" ["-c", s] ""

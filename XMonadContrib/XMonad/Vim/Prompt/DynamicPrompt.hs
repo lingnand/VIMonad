@@ -6,6 +6,7 @@ module XMonad.Vim.Prompt.DynamicPrompt
     , setInputAndDone
     , changeInputAndDone
     , cycleDictionaryForDPrompt
+    , parseShellArgs
     ) where
 
 import XMonad.Prompt
@@ -105,7 +106,14 @@ data PromptWidget = PromptWidget { promptPrefix :: String
                                  , promptCommandToComplete :: String -> String
                                  , promptNextCompletion :: (String, Int) -> [String] -> (String, Int)
                                  , promptComplFunction :: XPConfig -> ComplFunction
-                                 , promptAction :: X () -> X () -> OnWindowsInserted -> String -> X ()
+                                 -- the prompt action takes
+                                 -- immi (the X action that should be run immediately
+                                 -- final (the X action that should be run after everything finished)
+                                 -- the OnWindowsInserted data
+                                 -- whether the user indicated the current command should be a silent one
+                                 -- a re-prompt action which allows the widget to retrigger the dynamicprompt if necessary
+                                                                                                                                 -- finally the string for process
+                                 , promptAction :: X () -> X () -> OnWindowsInserted -> Bool -> ((XPConfig -> XPConfig) -> [String] -> X () -> X () -> OnWindowsInserted -> X ()) -> String -> X ()
                                  , promptHighlightPredicate :: String -> (String, Int) -> Bool
                                  }
 -- (prefix, commandToComplete, nextCompletion, complFunc, modeAction)
@@ -118,10 +126,8 @@ dwgt p pre cf act = PromptWidget { promptPrefix = pre
                                  }
 widgetCmd w c = let p = promptPrefix w++" " in joinStr p $ tail $ splitOn p c
 findWidget pre = find ((==pre) . promptPrefix) dynamicPromptWidgets
-findWidgetForAction c = fmap (\(r, w) -> (fromJust r, w)) $ find (isJust . fst) $ fmap (\w -> (stripPrefix (promptPrefix w ++ " ") c, w)) dynamicPromptWidgets
 
-dwgtMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) (\immi final _ s -> (modeAction mode) s "" >> immi >> final)
-dwgtDictMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) (\immi final owi s -> do
+dwgtDictMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) $ \immi final owi sil _ s -> do
     applyOnWindowsInserted owi {
               numberOfWindows = 1
             , logFinished = \a b -> do
@@ -129,10 +135,10 @@ dwgtDictMode mode prompt = dwgt mode prompt (\c -> completionFunction mode) (\im
                 final
         }
     (modeAction mode) s "" 
-    immi)
+    immi
 dynamicPromptWidgets = [
         -- this follow the (prefix, prompt) format
-        dwgt VBPrompt "vb" (\c -> vbComplFunc) (\immi final owi s -> do
+        dwgt VBPrompt "vb" (\c -> vbComplFunc) (\immi final owi sil _ s -> do
             -- wait until the vb is completely spawned
             applyOnWindowsInserted owi {
                       numberOfWindows = 1
@@ -149,7 +155,7 @@ dynamicPromptWidgets = [
       , dwgtDictMode bigCHSDMode "sdcv-bigChinese"
       , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction'
       , dwgt RPCPrompt "rpc" rpcComplFunc rpcAction'
-      , dwgtMode CalcMode "calc"
+      , dwgt CalcMode "calc" (\_ -> completionFunction CalcMode) calcAction'
     ]
 
 evalStr s = let evalcomps = splitOn "`" s
@@ -263,7 +269,7 @@ dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir s
     | Just a <- tryRev rp args = a
      -- grave key evaluation (evaluate the grave enclosed string in shell and show the output as autocompletion)
     | (_, evalstr@(_:_), _) <- evalStr s = 
-        fmap sht . take evalLimit . lines <$> (runProcessWithInput "/bin/sh" ["-c", "loader " ++ escapeQuery evalstr] "")
+        fmap sht . take evalLimit . lines <$> (runEvaluation $ "loader " ++ escapeQuery evalstr)
     | otherwise = p unescapedArgs 
     where args = parseShellArgs s
           unescapedArgs = map unescape args
@@ -340,12 +346,14 @@ dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir s
           p _ = trycmp [scopecmp, shellcmp]
 
 cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "win7"]
-dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s = 
+dpromptAction c cmds home hist cimdb myScriptsDir immi final owi history str = 
     -- perform some special actions on some commands
-    let args = parseShellArgs s
+    let (silent, args, s) = case parseShellArgs str of
+                                "sil":res -> (True, res, joinStr " " res)
+                                as -> (False, as, str)
         follow = immi >> final
     in case args of
-        _ | Just (rest, w) <- findWidgetForAction s -> (promptAction w) immi final owi rest
+        ha:pas | Just w <- find ((==ha) . promptPrefix) dynamicPromptWidgets -> (promptAction w) immi final owi silent (\ch pre immi final owi -> dynamicPrompt' (ch c) cmds home history hist cimdb pre immi final owi) $ joinStr " " pas
         ['\'',pre]:pa:_ -> spawn (myScriptsDir++"/xshortcut mark "++[pre]++" "++pa) >> follow
         "diff":pas -> runTerm "vimdiff" "vimdiff" $ "loader vimdiff " ++ joinStr " " pas
         "reboot":_ -> removeAllWorkspaces >> spawn "reboot"
@@ -360,12 +368,11 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
                    if de || validDirShortcut uha
                       then chdir uha
                       else do
-                          let mha = stripPrefix "sil " s
-                              silent = isJust mha
-                              aha = fromMaybe s mha
-                              ha' = if null (trim aha) then "." else aha
-                              run = myScriptsDir++"/dphandler" ++" "++ha'
-                          if fe || de || '/' `elem` ha' || ('.' `elem` ha' && pas == []) || ha `elem` cmdsWithGUI
+                          let s' = if null (trim s) then "." else s
+                              run = myScriptsDir++"/dphandler" ++" "++s'
+                          -- if the file does not exist but it is not one of the commands
+                          -- then we can pretty much assume that it's a new file to be created
+                          if fe || not (uha `elem` cmds) || ha `elem` cmdsWithGUI
                              then do
                                   applyOnWindowsInserted owi {
                                             numberOfWindows = 1
@@ -377,10 +384,8 @@ dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi s =
                              else do
                                  -- we check if the user has silent as the first argument
                                  if silent then spawn run >> follow
-                                           else do
-                                               let output pro ags = map (limitSpace outputWidth) . lines <$> (runProcessWithInput pro ags "")
-                                               precompl <- output "/bin/sh" ["-c", run ++ " 2>&1"]
-                                               dynamicPrompt' c cmds home history hist cimdb precompl immi final owi
+                                           else do precompl <- map (limitSpace outputWidth) . lines <$> (runEvaluation run)
+                                                   dynamicPrompt' c cmds home history hist cimdb precompl immi final owi
                where chdir d = do
                          dir <- if null d
                                    then return home
@@ -415,14 +420,15 @@ dynamicPrompt c cimdb immi final owi = do
     --     fasdd = fst $ unzip fasdd'
     --     fasdf = fst $ unzip fasdf'
     -- dynamicPrompt' c cmds home (absolute++relative)
+    -- c precompl immi final owi
     dynamicPrompt' c cmds home history hist cimdb [] immi final owi
 
 dynamicPrompt' c cmds home history hist cimdb precompl immi final owi = do
     d <- getCurrentWorkspaceDirectory
     io $ setCurrentDirectory d
-    myScriptsDir <- io getMyScriptsDir
+    myScriptsDir <- getScriptsDir
     -- only deal with directories or files at the moment; not doing check on the file / directories to save performance
-    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir) (dpromptAction c cmds home history hist cimdb myScriptsDir immi final owi) history
+    mkXPromptWithHistoryAndReturn (DPrompt $ shortend home d) c (dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir) (dpromptAction c cmds home hist cimdb myScriptsDir immi final owi) history
     return ()
 
 -- cycling between different dictionary

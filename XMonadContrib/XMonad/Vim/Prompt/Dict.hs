@@ -12,7 +12,7 @@ import XMonad.Util.Run
 import XMonad.Vim.Prompt.Vimb
 import XMonad.Vim.Constants
 
-getSdcvBin = getMyScriptsDir >>= return . (++"/xsdcv")
+getSdcvBin = getScriptsDir >>= return . (++"/xsdcv")
 sdLength = "250"
 
 data StarDictMode = SDMode { prompt :: String
