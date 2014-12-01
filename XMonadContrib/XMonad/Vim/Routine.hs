@@ -24,6 +24,8 @@ import Data.Maybe
 import XMonad
 import XMonad.Vim.Constants
 import XMonad.Util.Run
+import Text.Regex.Posix
+import Control.Monad
 
 logger s = spawn $ "echo \"`date`: \"" ++ escapeQuery s ++ " >> ~/.xmonad/xmonad.log"
 
@@ -101,4 +103,18 @@ processKey (k, a) =
 addPrefix (k, a) = ("M-"++k, a)
 
 -- bug: cannot contain pipe symbol which is wierd
-runEvaluation s = runProcessWithInput "/bin/sh" ["-c", s] ""
+-- runEvaluation' :: MonadIO m => String -> String -> m String
+-- runEvaluation' "" input = return input
+-- runEvaluation' s input = let (cmd, aft) = bk "" s in runProcessWithInput "/bin/sh" ["-c", cmd] input >>= runEvaluation' aft
+--     where bk pre "" = (reverse pre, "")
+--           bk pre ('\\':'|':aft) = bk ('\\':'|':pre) aft
+--           bk pre ('|':aft) = (reverse pre, aft)
+--           bk pre (h:aft) = bk (h:pre) aft
+--
+-- runEvaluation :: MonadIO m => String -> m String
+-- runEvaluation = flip runEvaluation' ""
+
+-- dirty hack
+runEvaluation :: MonadIO m => String -> m String
+runEvaluation s = if s =~ "\\| *xsel *" then spawn s >> return ""
+                                        else runProcessWithInput "/bin/sh" ["-c", s] ""
