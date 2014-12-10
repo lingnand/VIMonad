@@ -133,7 +133,7 @@ quickWorkspaceTags = map wrapList quickWorkspaceSequence
 quickWorkspaceSequence = "`12345789"
 --- subgroup symbol sequence: we eliminated '`' due to its ugliness from the subgroup indexing stream; and note that the sub group doesn't necessarily need an index after all
 -- this is for tab keys
-subgroupSymbolSequence = "1234567890-="
+subgroupSymbolSequence = "1234567890"
 columngroupSymbolSequence = "12345"
 indexToSymbol s n = if n >= 0 && n < length s then Just [s !! n] else Nothing
 subgroupIndexToSymbol = indexToSymbol $ fullSequence subgroupSymbolSequence
