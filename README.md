@@ -23,6 +23,7 @@ VIMonad is built upon XMonad and it borrows a lot of great modules already exist
 * [cabal](http://www.haskell.org/cabal/): for installing packages
 * [wmctrl](http://tomas.styblo.name/wmctrl/): for activating windows from the command line
 * [rpd](http://github.com/lynnard/rpd): if you'd like to use the radio service in VIMonad
+* [rpc](http://github.com/lynnard/rpc): if you'd like to use the radio service in VIMonad
 * [taskwarrior][task]: task management from the prompt
 * [vimb][vimb]: light-weight browser with its histories and bookmarks accessible from the prompt
 * [xdotool](http://www.semicomplete.com/projects/xdotool/xdotool.xhtml): for playing back text macros
@@ -425,6 +426,9 @@ You can
 
 * execute arbitrary shell commands, with full shell completion support
     * if the program name is eliminated, it defaults to opening/launching the file using `rifle` from `ranger`
+    * when `<Enter>` is pressed, the prompt will run the command on the prompt, block user input and eventually show the output of the command via completion
+    * when `C-<Enter>` is pressed, the prompt will silently run the command on the prompt in the background
+        * this can also be achieved by prepending your command with the keyword `sil`, e.g., `sil chmod +x bin/binfile`
 * preview files
 
     ![](images/dprompt_preview.png)
@@ -434,8 +438,12 @@ You can
     ![](images/dprompt_search.png)
 
     * `l` (locate): search for files recursively in a given directory (or the current one, if not specified) using `find`
+        * `l [directory/to/search] KEYWORD KEYWORD ...`
+        * press `<Tab>` and `S-<Tab>` to select the files/directories
     * `t` (tag): search for a directory in the *tag database* using *find*
-    * `g` (grep): list all files containing the given words
+    * `g` (grep): list all files containing the given words inside a given directory (or the current one, if not specified)
+        * `g [directory/to/search] KEYWORD KEYWORD ...`
+        * press `<Tab>` and `S-<Tab>` to select the files
     * `h` (history): search for files launched in the past 
 * enter application-specific completion environment
     * `git`
@@ -451,10 +459,16 @@ You can
     * [vimb][vimb] history and bookmarks
     * [rpc] radio service for douban.fm and jing.fm
 * execute shortcut commands, e.g.
-    * `M-d`/`M-C-d`: cycle dictionaries forward/backwards
-    * `M-h`: reboot
+    * `M-d`/`M-S-d`: cycle dictionaries forward/backwards
     * `M-b`: input `vb ` in the prompt and enter [vimb][vimb] completion environment
     * `M-k`: input `tk ` in the prompt and enter [task][task] completion environment
+    * 
+* input Chinese words
+    * while inside the prompt, enter pinyin preceded by backslash e.g., `\pinyin`
+    * the prompt will show Chinese word candidates (of best match) for the pinyin immediately after the backslash 
+    * use `<Tab>` or `S-<Tab>` to select the word you'd like
+    * if the prompt only completes part of the pinyin, e.g. only showing `拼` for `\pinyin`, after selecting `拼` the prompt will become `拼yin` with cursor positioned after `拼`
+        * now just type backslash again to trigger completion for the remaining part
 
 #### Search prompt
 
@@ -465,7 +479,7 @@ Search windows by register/title/workspace name in the current X session
 
 #### Wallpaper prompt
 
-The wallpaper prompt enables you to switch wallpapers on the fly; it also has a [wallbase backend](https://github.com/sevensins/Wallbase-Downloader) as well as a rss downloader backend (for flickr) for you to search and download wallpapers by tag/description.
+The wallpaper prompt enables you to switch wallpapers on the fly; it also has a [wallhaven backend](https://github.com/sevensins/Wallbase-Downloader) as well as a [rss downloader backend](https://github.com/lynnard/rss-image-download) (for flickr) for you to search and download wallpapers by tag/description.
 
 Wallpaper prompt is triggered by `M-z`. When the prompt is active, all the windows will be painted semi-transparent so that you can look through them to see the glory of the wallpapers.
 

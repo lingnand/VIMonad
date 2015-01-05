@@ -1,0 +1,37 @@
+#!/bin/bash
+# $1 the rss url (optional), $2 the directory to put all the image in
+# NOTE: $2 will be cleaned first
+
+if [ -d "$1" ]; then 
+    DIR="${1%/}"
+else
+    DIR="${2%/}"
+fi
+
+[ -z "$DIR" ] && exit 1
+
+RSS="$DIR/rss"
+RSS_TMP="`mktemp`"
+URL_FILE="$DIR/url"
+
+URL="`cat "$URL_FILE" 2>/dev/null`"
+[ -z "$URL" ] && URL="$1"
+
+if [ -n "$URL" ]; then
+    curl -s "$URL" -o "$RSS_TMP"
+    ## check if the rss contain at least an enclosure
+    if fgrep -m1 '<enclosure url=' "$RSS_TMP" && (! [ -e "$RSS" ] || ! diff "$RSS_TMP" "$RSS"); then
+        mkdir -p "$DIR"
+        rm -rf "$DIR/"*
+        cp "$RSS_TMP" "$RSS"
+        echo "$URL" > "$URL_FILE"
+        sed -n 's/<enclosure url="\([^"]*\)".*/\1/p' "$RSS" | while read line; do
+            name="${line##*/}"
+            name="${name%%.*}"
+            ext="${line##*.}"
+            ext="${ext%%[^a-zA-Z]*}"
+            curl "$line" -o "$DIR/$name.$ext"
+        done
+    fi
+fi
+rm "$RSS_TMP"
