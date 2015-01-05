@@ -1,0 +1,47 @@
+#! /bin/sh
+
+# split the arguments into words for better search
+
+usage()
+{
+    cat << EOF
+    usage: [-n lines] search_term_1 search_term_2 ...
+
+    OPTIONS:
+    -n      the number of lines to limit the result
+    -h      show this usage
+EOF
+}
+
+lines=10
+while getopts "n:" OPTION
+do
+    case $OPTION in
+        n)
+            lines=$OPTARG
+            ;;
+        ?)
+            usage
+            exit
+            ;;
+    esac
+done
+
+index=$((OPTIND-1))
+shift $index
+
+fhistory="$HOME/.config/vimb/history"
+fbookmarks="$HOME/.config/vimb/bookmark"
+
+# build the search string
+awk_search_pattern=
+for w in "$@"
+do
+    awk_search_pattern="$awk_search_pattern/$w/"'&&'
+done
+
+awk_search_pattern=${awk_search_pattern%&&}
+
+# for each line append the link address to the end
+LC_ALL=C tac "$fbookmarks" "$fhistory" | awk 'BEGIN {IGNORECASE = 1; FS = "\t" }'"$awk_search_pattern"'&&!($1 in a){a[$1];for (i=2; i<NF; i++) printf "%s\t", $i; printf "%s\t", $NF; print $1}' | head -n "$lines" | column -t -s $'\t'
+

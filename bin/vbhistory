@@ -1,0 +1,4 @@
+#! /bin/sh
+# $1 is the number of history items to fetch; default to 10
+fhistory="$HOME/.config/vimb/history"
+tac "$fhistory" | awk 'BEGIN {FS = "\t"} !($1 in a) {a[$1];for (i=2; i<NF; i++) printf "%s\t", $i; printf "%s\t", $NF; print $1}' | head -n "$1" | column -t -s $'\t'

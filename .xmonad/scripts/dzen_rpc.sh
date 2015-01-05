@@ -6,9 +6,9 @@ shopt -s extglob
 # the limit is for (status, song description, lyrics), in BYTES
 #limits=(0 120 0)
 # we use a diffusion algorithm (if the first field is below the limit then that difference is added to the second field, so on and so forth)
-channel_limit=25
-artist_limit=15
-song_limit=20
+channel_limit=8
+artist_limit=8
+song_limit=10
 sep=' '
 
 channel_color=
@@ -18,6 +18,11 @@ liked_song_color="$notify"
 icon_color="#4c7899"
 lyric_color="#a6e22e"
 lyricinactive_color=
+
+# in seconds (24 hours)
+restart_end_file="$HOME/.rpd/rpd.end"
+# in seconds (30)
+restart_attempt_interval=30
 
 error() {
     echo " "
@@ -56,20 +61,39 @@ cutstr() {
     RESULT="$ms"
 }
 
+## check first if rpd is actually running
+if ! rpd-running; then
+    current_time="`date +%s`"
+    last_restart_time="`cat "$restart_end_file"`"
+    if [ -z "$last_restart_time" ] || (( current_time - last_restart_time > restart_attempt_interval )); then
+        rpd
+        date +%s > "$restart_end_file"
+    fi
+    error
+elif [ -f "$restart_end_file" ]; then
+    rm "$restart_end_file"
+fi
+
 DIFFUSION=0
-output="`rpc info $'%u\t%t\t%a\t%c\t%k\t%r'`"
+output="`rpc info $'%u\t%t\t%a\t%c\t%k\t%r\t%b\t%i'`"
 status="`cut -d$'\t' -f1 <<< "$output"`"
-cutstr "$channel_limit" "`cut -d$'\t' -f4 <<< "$output"`"
+channel_orig="`cut -d$'\t' -f4 <<< "$output"`"
+cutstr "$channel_limit" "$channel_orig"
 channel="$RESULT"
-cutstr "$artist_limit" "`cut -d$'\t' -f3 <<< "$output"`"
+artist_orig="`cut -d$'\t' -f3 <<< "$output"`"
+cutstr "$artist_limit" "$artist_orig"
 artist="$RESULT"
-cutstr "$song_limit" "`cut -d$'\t' -f2 <<< "$output"`"
+song_orig="`cut -d$'\t' -f2 <<< "$output"`"
+cutstr "$song_limit" "$song_orig"
 song="$RESULT"
 kbps="`cut -d$'\t' -f5 <<< "$output"`"
 liked="`cut -d$'\t' -f6 <<< "$output"`"
+album_orig="`cut -d$'\t' -f7 <<< "$output"`"
+cover_img="`cut -d$'\t' -f8 <<< "$output"`"
 
 stopped=false
 stat= desc= lrc=
+
 case "$status" in
     play) 
         icon="$icondir/play.xbm"

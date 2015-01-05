@@ -1,0 +1,3 @@
+#! /bin/sh
+
+/usr/bin/sdcv -n "$@" | sed 's/ /\&nbsp;/g ; s/$/<br>/' | w3m -T text/html -F -dump

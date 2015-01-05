@@ -1,0 +1,6 @@
+#! /bin/bash
+
+# the aim of this thing is to load my profile and then execute the given command
+. "$HOME/.terminal"
+# . "$HOME/.profile"
+"${@:1}"

@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# we need to expand all ~
+args=()
+collect_args() {
+    args=( "$@" )
+}
+eval "collect_args $@"
+
+if [ -e "${args[0]}" ] || [[ "${args[0]}" = */* ]]; then
+    rifle "${args[@]}"
+else
+    xterm -e zsh -ic "$@; zsh"
+fi

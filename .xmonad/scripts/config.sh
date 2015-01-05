@@ -1,12 +1,14 @@
 #!/bin/bash
 
-icondir="$HOME/.xmonad/dzen2_retina"
+icondir="$HOME/.xmonad/dzen2"
 background="#181512"
 #foreground="#d6d6d6"
 foreground="#bea492"
 highlight="#fafac0"
 
-YPOS="25"
+# YPOS="25"
+# YPOS="0"
+STATUSBAR_HEIGHT="25"
 HEIGHT="12"
 
 #FONT="-artwiz-lime-medium-r-normal-*-10-110-75-75-m-50-iso8859-*"

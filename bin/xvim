@@ -1,0 +1,2 @@
+#!/bin/sh
+xterm -name vim -e loader vim --servername "vim" "$@"

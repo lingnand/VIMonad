@@ -2,8 +2,8 @@
 
 source $(dirname $0)/config.sh
 
-MAILDIR="$HOME/.mail/lingnan.d"
-NUMBER=`find "$MAILDIR/INBOX/new" "$MAILDIR/CAMBRIDGE/new" -type f | wc -l`
+MAILDIR="$HOME/.mail/mustard"
+NUMBER=`find "$MAILDIR/INBOX/new" -type f | wc -l`
 ICON='^i(/home/lingnan/.xmonad/dzen2/mail.xbm)'
 
 if (( "$NUMBER" > 0 )); then

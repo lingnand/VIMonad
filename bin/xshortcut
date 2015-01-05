@@ -1,0 +1,33 @@
+#!/bin/sh
+
+# the aim is to provide a level of integration with ranger
+RANGER_BOOKMARK="$HOME/.config/ranger/bookmarks"
+# commands mark or print
+if (( ${#2} <= 1 )); then
+    case $1 in
+        mark)
+            if [ -n "$2" ]; then
+                p="`realpath "${3:-.}"`"
+                if grep "^$2:" "$RANGER_BOOKMARK"; then
+                    sed -i "/^$2:/d" "$RANGER_BOOKMARK"
+                fi
+                echo "$2:$p" >> "$RANGER_BOOKMARK"
+            else
+                cat "$RANGER_BOOKMARK"
+            fi
+            ;;
+        print)
+            if [ -n "$2" ]; then
+                grep "^$2:" "$RANGER_BOOKMARK"
+            else
+                cat "$RANGER_BOOKMARK"
+            fi
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+else
+    exit 2
+fi
+

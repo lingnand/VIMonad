@@ -2,4 +2,4 @@
 
 # this is intended to be used in the xmonad for getting meaning of words
 # $1 is the dictionary to check against, $2 is the word to check for, and $3 is the number of characters for each line
-"$HOME/bin/sdcv" -u "$1" "$2" | fmt -s -w "${3:-220}"
+"$HOME/bin/sdcv" -u "$1" $2 | fmt -s -w "${3:-220}"

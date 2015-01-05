@@ -1,5 +1,6 @@
 import Data.List
 import System.IO
+import System.Exit
 import XMonad
 import qualified XMonad.StackSet as W
 import XMonad.Prompt
@@ -8,6 +9,7 @@ import XMonad.Hooks.ManageHelpers
 import XMonad.Hooks.ManageDocks
 import XMonad.Hooks.ICCCMFocus
 import XMonad.Hooks.EwmhDesktops hiding (fullscreenEventHook)
+import XMonad.Hooks.DynamicBars
 import qualified XMonad.Hooks.UrgencyHook as U
 import XMonad.Layout.Decoration
 import XMonad.Util.Run
@@ -21,15 +23,17 @@ import XMonad.Vim.Term
 import XMonad.Vim.WindowStyle
 import XMonad.Vim.Workspaces
 import XMonad.Vim.Constants
+import XMonad.Vim.CIM
+import Graphics.X11.Xinerama
 
 ---- ModMask
-myModMask = mod4Mask
+myModMask = mod5Mask
 
 ---- Font
 myTerminalFont = "-artwiz-limey-medium-r-normal-*-10-110-75-75-m-50-iso8859-*"
-myFont = "xft:WenQuanYi Zen Hei Mono:pixelsize=18"
-myBigFont = "xft:WenQuanYi Zen Hei Mono:pixelsize=20"
-myDzenFont = "WenQuanYi Zen Hei Mono:pixelsize=17"
+myFont = "xft:WenQuanYi Zen Hei Mono:pixelsize=12"
+myBigFont = "xft:WenQuanYi Zen Hei Mono:pixelsize=13"
+myDzenFont = "WenQuanYi Zen Hei Mono:pixelsize=12"
 
 ---- Color constants
 color0= "#332d29"
@@ -85,7 +89,7 @@ myTabsTheme = def { activeColor         = myBgHLight
                   , activeTextColor     = myFgHLight
                   , inactiveTextColor   = myFgColor
                   , fontName            = myFont
-                  , decoHeight          = 25 
+                  , decoHeight          = 16 
                   }
 
 mySubTheme = def { winInactiveColor = inactiveColor myTabsTheme
@@ -100,11 +104,12 @@ mySubTheme = def { winInactiveColor = inactiveColor myTabsTheme
 
 myXPConfig ref = def { 
       font = myBigFont
-    , bgColor = myBgDimLight
+    , bgColor = myBgColor
     , fgColor = myFgColor
     , bgHLight = myBgHLight
     , fgHLight = myFgHLight
     , promptBorderWidth = 0
+    , position = Top
     , height = decoHeight myTabsTheme
     , historyFilter = deleteConsecutive
     , autoComplete = Nothing
@@ -164,11 +169,12 @@ taskGroups =
                                      }
           }
       -- pidgin buddylist
-    , tgd { taskGroupName = "pidgin-buddy"
+    , let ph h = h (1/5) (myDzenBarHeight/1200) in
+      tgd { taskGroupName = "pidgin-buddy"
           , filterPredicate = isPidginBuddyList
-          , launchHook = rightPanelHook
+          , launchHook = ph rightPanelHook
           , construct = \n _ -> mkNamedScratchpad scratchpads "pidgin"
-          , windowStyle = windowStyleFromList [rightPanelHook, leftPanelHook, doSink]
+          , windowStyle = windowStyleFromList [ph rightPanelHook, ph leftPanelHook, doSink]
           }
       -- pidgin conversation windows
       -- we'd like to put the conversations (self poped one) into another workspace if they are not launched by the user
@@ -226,38 +232,37 @@ taskGroups =
           , filterPredicate = isTerm <&&> (title =? "mutt" <||> appName =? "mutt")
           , construct = \n _ -> seqn n $ runTerm "mutt" "mutt" "loader mutt"
           }
-    -- canto general instance
-    , tgd { taskGroupName = "canto"
-          , filterKey = "o"
-          , filterPredicate = isTerm <&&> (title =? "canto" <||> appName =? "canto")
-          , construct = \n _ -> seqn n $ runTerm "canto" "canto" "loader canto"
-          }
-      -- intellij singleton
-    -- , tgd { taskGroupName = "idea"
-    --       , filterKey = "j"
-    --       , filterPredicate = className =? "jetbrains-idea"
-    --       , localFirst = False
-    --       , construct = \n _ -> runShell "intellij-idea-ultimate-edition"
-    --       }
       -- gimp singleton
-    , tgd { taskGroupName = "gimp"
-          , filterKey = "S-m"
-          , filterPredicate = className =? "Gimp"
-          , localFirst = False
-          , construct = \_ _ -> runShell "gimp"
-          }
+    -- , tgd { taskGroupName = "gimp"
+    --       , filterKey = "S-m"
+    --       , filterPredicate = className =? "Gimp"
+    --       , localFirst = False
+    --       , construct = \_ _ -> runShell "gimp"
+    --       }
       -- inkscape (can have multiple documents)
-    , tgd { taskGroupName = "inkscape"
-          , filterKey = "k"
-          , filterPredicate = className =? "Inkscape"
-          , construct = \n _ -> seqn n $ runShell "inkscape"
-          }
+    -- , tgd { taskGroupName = "inkscape"
+    --       , filterKey = "k"
+    --       , filterPredicate = className =? "Inkscape"
+    --       , construct = \n _ -> seqn n $ runShell "inkscape"
+    --       }
       -- libreoffice (can have multiple documents)
     , tgd { taskGroupName = "libre"
-          , filterKey = ""
+          , filterKey = "l"
           , filterPredicate = fmap (isInfixOf "libreoffice") className
           , construct = \n _ -> seqn n $ runShell "libreoffice"
           }
+      -- virtualboxes
+    -- , tgd { taskGroupName = "win7"
+    --       , filterKey = "w"
+    --       , filterPredicate = (className =? "VirtualBox" <||> className =? "VBoxSDL") <&&> fmap (isPrefixOf "Win7") title 
+    --       , localFirst = False
+    --       , construct = \_ _ -> runShell "win7"
+    --       }
+      -- games
+    -- , tgd { taskGroupName = "game"
+    --       , filterKey = ""
+    --       , filterPredicate = className =? "retroarch"
+    --       }
       -- all remaining xterms can be matched in this group
     , tgd { taskGroupName = "term(...)"
           , filterKey = ""
@@ -271,31 +276,41 @@ taskGroups =
     ]
 
 --- Status bar 
-dzenBar x y w h ta fg bg font = "dzen2 -x '"++(show x)++"' -y '"++(show y)++"' -h '"++(show h)++"' -w '"++(show w)++"' -ta '"++ta++"' -fg '"++fg++"' -bg '"++bg++"' -fn '"++font++"'"
+dzenBar x y w h ta fg bg font screen = "dzen2 -x '"++(show x)++"' -y '"++(show y)++"' -h '"++(show h)++"' -w '"++(show w)++"' -ta '"++ta++"' -fg '"++fg++"' -bg '"++bg++"' -fn '"++font++"' -xs '"++show screen++"'"
 conky script = "conky -qc "++script
 pipe a b = a++" | "++b
 trayer edge align w h tint alpha = "trayer --edge "++edge++" --align "++align++" --widthtype pixel --width "++show w++" --height "++show h++" --expand false --tint 0x"++tail tint++" --transparent true --alpha "++show alpha++"&"
 
 myMusicBarStdWidth = 350
 myStatBarWidth = 450
-myDzenBarHeight = 25
+myDzenBarHeight = 16
 myDzenBarOverlap = 5
 
 -- the width of the xmonad bar and the status bar would be determined dynamically during boot time
 -- this method will return the log bar instance for xmonad to pipe the output to
-myStatusBars = do
-    w <- fmap (read . head . lines) $ runProcessWithInput "screen-res" ["width"] ""
-    myXMonadDir <- io getMyXMonadDir
+myStatusBarsHook xineramaScreenInfo = do
+    -- first get the rect of the respective screen id
+    let w = xsi_width xineramaScreenInfo
+        h = xsi_height xineramaScreenInfo
+    logger $ "entered status bar hook with id = " ++ show xineramaScreenInfo ++ " and width = " ++ show w
+    -- w <- fmap (read . head . lines) $ runProcessWithInput "screen-res" ["width"] ""
+    myXMonadDir <- getXMonadDir
     let xbarx = 0
         xbarw = statbarx + myDzenBarOverlap
-        statbarw = w / 3
+        statbarw = w `div` 3
         statbarx = w - statbarw
-        myDzenBar x w a = dzenBar x 0 w myDzenBarHeight a myFgColor myBgColor myDzenFont
+        -- for some interesting reason the patch-er of xinerama for dzen2 decided that screen numbers should be incremented by 1
+        myDzenBar x w a = dzenBar x 0 w myDzenBarHeight a myFgColor myBgColor myDzenFont $ fromIntegral (xsi_screen_number xineramaScreenInfo) + 1
+        -- myDzenBar x w a = dzenBar x (h-myDzenBarHeight) w myDzenBarHeight a myFgColor myBgColor myDzenFont $ fromIntegral (xsi_screen_number xineramaScreenInfo) + 1
         myLogBar = myDzenBar xbarx xbarw "l"
         myStatBar = (conky $ myXMonadDir++"/.conky_dzen") `pipe` (myDzenBar statbarx statbarw "r") 
+    logger $ "logbar command: " ++ myLogBar
     handle <- spawnPipe myLogBar
+    logger $ "statbar command: " ++ myStatBar
     spawn myStatBar
     return handle
+
+myStatusBarsCleanupCmd = "killall dzen2 conky"
 
 myManageHook = composeAll [ 
       isFullscreen --> doFullFloat  
@@ -304,14 +319,17 @@ myManageHook = composeAll [
     ]
 
 otherCommands = 
-    [ ("<F10>", io getMyScriptsDir >>= \myScriptsDir -> spawn $ "amixer get Master | fgrep '[on]' && amixer set Master mute || amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
-    , ("<F11>", io getMyScriptsDir >>= \myScriptsDir -> spawn $ "amixer set Master 5-; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
-    , ("<F12>", io getMyScriptsDir >>= \myScriptsDir -> spawn $ "amixer set Master 5+; amixer set Master unmute; "++myScriptsDir++"/dzen_vol.sh")
+    [ 
+      ("<XF86AudioMute>", spawn "vol -I toggle")
+    , ("<XF86AudioLowerVolume>", spawn "vol -I dec")
+    , ("<XF86AudioRaiseVolume>", spawn "vol -I inc")
+    , ("M-C-q",  spawn myStatusBarsCleanupCmd >> io (exitWith ExitSuccess))
+    , ("M-S-q", spawn $ myStatusBarsCleanupCmd++"; xmonad --restart")
     ]
 
 main = do
-    dzenLogBar <- myStatusBars
-    config <- viminize myTabsTheme myXPConfig myVimStatusTheme dzenLogBar taskGroups otherCommands $ 
+    cimdb <- dbOpen
+    config <- viminize myTabsTheme myXPConfig myVimStatusTheme myStatusBarsHook myStatusBarsCleanupCmd taskGroups cimdb otherCommands $ 
             ewmh $ U.withUrgencyHook U.NoUrgencyHook $ def {
                   manageHook = myManageHook 
                 , logHook = takeTopFocus
@@ -320,5 +338,7 @@ main = do
                 , borderWidth = 2
                 , normalBorderColor = myBgColor
                 , focusedBorderColor = color6
+                , workspaces = [scratchpadWorkspaceTag, head quickWorkspaceTags]
             }   
     xmonad config
+    dbClose cimdb

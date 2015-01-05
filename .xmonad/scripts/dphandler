@@ -3,7 +3,7 @@
 #we should try to import the fasd stuff if it's not already imported
 
 command_not_found_handler () {
-    rifle "$1"
+    rifle "$@"
 }
 
 # test if the first file exists

@@ -1,0 +1,6 @@
+# !/bin/sh
+
+LIBRARY_ROOT="$HOME/DB"
+
+cd "$LIBRARY_ROOT"
+find -L * \( -name '[^a-z]*' -o -name '* *' \) -prune \( "$@" \) -o \( "$@" \)

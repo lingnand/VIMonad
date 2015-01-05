@@ -1,0 +1,40 @@
+#!/bin/sh
+
+usage () {
+    echo "$0: $0 [-c <byte> -C <byte>] [-n <line> -N <line>] file [file ... ]"
+}
+
+while getopts "c:C:n:N:" OPTION
+do
+    case $OPTION in
+        c) start="$OPTARG"; mode=byte ;;
+        C) end="$OPTARG"; mode=byte ;;
+        n) start="$OPTARG"; mode=line ;;
+        N) end="$OPTARG"; mode=line ;;
+        *) usage; exit 201 ;;
+    esac
+done
+
+if [ $start -gt $end ] ; then
+    echo "end point cannot be before start point"
+    usage
+    exit 202
+fi
+
+head_cmd=
+tail_cmd=
+end=$((end - start + 1))
+if [ $mode = "line" ] ; then
+    head_cmd="-n $end"
+    tail_cmd="-n +$start"
+elif [ $mode = "byte" ] ; then
+    head_cmd="-c $end"
+    tail_cmd="-c +$start"
+fi
+
+shift $((OPTIND-1))
+cat "${@:-/dev/stdin}" | tail $tail_cmd | head $head_cmd
+#if [ $# -eq 0 ] ; then
+#else
+    #tail $tail_cmd "$@" | head $head_cmd
+#fi

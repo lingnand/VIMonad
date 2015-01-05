@@ -1,0 +1,85 @@
+#! /bin/sh
+
+# # first test if we should use Master (card0) or hdmi_volume (card1)
+# if amixer -c 1 get hdmi_volume >/dev/null 2>&1; then
+#     MUTE_CHANNEL='IEC958,2'
+#     VOL_CHANNEL='hdmi_volume'
+#     CARD=1
+# else
+#     MUTE_CHANNEL='Master'
+#     VOL_CHANNEL='Master'
+#     CARD=0
+# fi
+#
+# case "$1" in
+#     mute)
+#         if amixer -c "$CARD" get "$MUTE_CHANNEL" | fgrep '[on]' >/dev/null 2>&1; then
+#             amixer -c "$CARD" set "$MUTE_CHANNEL" mute >/dev/null 2>&1
+#         else
+#             amixer -c "$CARD" set "$MUTE_CHANNEL" unmute >/dev/null 2>&1
+#         fi
+#         ;;
+#     inc) 
+#         amixer -c "$CARD" set "$VOL_CHANNEL" 5+ >/dev/null 2>&1
+#         amixer -c "$CARD" set "$MUTE_CHANNEL" unmute >/dev/null 2>&1
+#         ;;
+#     dec)
+#         amixer -c "$CARD" set "$VOL_CHANNEL" 5- >/dev/null 2>&1
+#         amixer -c "$CARD" set "$MUTE_CHANNEL" unmute >/dev/null 2>&1
+#         ;;
+#     *)
+#         # get the correct volume and mute information
+#         vol="`amixer -c "$CARD" get "$VOL_CHANNEL" | egrep -m 1 -o "[0-9]+%"`"
+#         vol="${vol%\%}"
+#         echo "$vol"
+#         if amixer -c "$CARD" get "$MUTE_CHANNEL" | fgrep '[off]' >/dev/null 2>&1; then
+#             exit 1
+#         else
+#             exit 0
+#         fi
+# esac
+
+INDICATOR=false
+while getopts "I" OPTION; do
+    case $OPTION in
+        I )
+            INDICATOR=true;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+show_indicator() {
+    if $INDICATOR; then
+        "$HOME/.xmonad/scripts/dzen_vol.sh"
+    fi
+}
+
+# since we are using pulseaudio now it's much easier
+case "$1" in
+    toggle)
+        amixer set Master toggle >/dev/null 2>&1
+        show_indicator
+        ;;
+    inc) 
+        amixer set Master 5%+ unmute >/dev/null 2>&1
+        show_indicator
+        ;;
+    dec)
+        amixer set Master 5%- unmute >/dev/null 2>&1
+        show_indicator
+        ;;
+    *)
+        # get the correct volume and mute information
+        vol="`amixer get Master | egrep -m 1 -o "[0-9]+%"`"
+        vol="${vol%\%}"
+        echo "$vol"
+        show_indicator
+        if amixer get Master | fgrep '[off]' >/dev/null 2>&1; then
+            exit 1
+        else
+            exit 0
+        fi
+        ;;
+esac
+
