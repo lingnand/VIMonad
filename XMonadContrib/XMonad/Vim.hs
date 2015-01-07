@@ -1335,4 +1335,4 @@ viminize tabTheme xpc colors dsb sc tgs cimdb additionalKeys config = do
                 , layoutHook = noBorders . avoidStruts . lessBorders Screen $ vimLayout tabTheme tgs
                 , terminal = myTerminal
                 , workspaces = workspaces config
-           } `additionalKeysP` ((normalize keys) ++ macroCommands ++ macroRemapCommands keys tgs)
+           } `additionalKeysP` ((normalize keys) ++ macroCommands ++ specialMacroCommands ++ macroRemapCommands keys tgs)

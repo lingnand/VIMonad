@@ -4,6 +4,7 @@ module XMonad.Vim.Macro
       toggleMacroMode
     , retrieveMacro
     , retrieveMacroCommands
+    , specialMacroCommands
     , MacroModeStorage(..)
     , appendMacroKey
     ) where
@@ -23,6 +24,7 @@ import XMonad.Vim.Constants
 import XMonad.Prompt.Input
 import XMonad.Prompt
 import XMonad.Util.Run
+import Control.Monad.Trans
 
 -- requirement for macro names
 -- - no number (number will be interpreted as number of times instead)
@@ -71,10 +73,17 @@ toggleMacroMode name = do
          _ -> XS.put $ MMS Nothing
     runLogHook
 
+
+specialMacroCommands :: MonadIO m => [(String, m ())]
+specialMacroCommands =
+    [ ("M-a y", spawn $ "xdotool type --clearmodifiers \"$(xsel -o)\"")
+    , ("M-a v", spawn $ "xdotool type --clearmodifiers \"$(xsel -bo)\"") ]
+
 retrieveMacroCommands keybindings conf' = flip E.catch (\(SomeException e) -> return []) $ do
     myMacrosDir <- getMacrosDir
     fs <- fmap (filter (not . (=~ "^\\."))) $ getDirectoryContents myMacrosDir
-    let allMacroNames = nubBy (\a b -> let (s, l) = if length a < length b then (a, b) else (a, b)
+    let allMacroNames = filter (\n -> not ("y" `isPrefixOf` n || "v" `isPrefixOf` n)) $
+                        nubBy (\a b -> let (s, l) = if length a < length b then (a, b) else (a, b)
                                        in s `isPrefixOf` l
                               ) $ fs 
                                 ++
