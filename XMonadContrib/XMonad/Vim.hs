@@ -589,7 +589,7 @@ motionKeys xpc tgs =
                                   mind = clamp oind 0 (length ls - 1)
                                   ind = fromJust mind
                        _ -> Nothing
-              move = fmap (maybeToMaybe fst) . move'
+              move = fmap (>>= fst) . move'
           in move' Next >>= \mt -> return $ case mt of
                     Just (t, ind) -> def { target = t
                                          -- , searchFunction = Just move
@@ -605,7 +605,7 @@ motionKeys xpc tgs =
     [ (sfk, fk, do
         -- get the second level nesting counting from the top
         ins <- focusIsInGStack
-        bs <- fmap (maybeToMaybe G.bases . maybeToMaybe G.current) G.getCurrentGStack
+        bs <- fmap ((>>= G.bases) . (>>= G.current)) G.getCurrentGStack
         let (t, ind, tls) = case (ins, bs) of
                              (True, Just (G.Node s@(W.Stack _ u _))) -> (fmap (\a -> (a, True)) $ G.focal $ ls !! ind', ind', concatMap G.flattened $ drop si $ take (ei+1) ls)
                                 where ls = W.integrate s
@@ -646,7 +646,7 @@ motionKeys xpc tgs =
                                ind = fromJust mind
                                (si, ei) = if ci < ind then (ci, ind) else (ind, ci)
                       _ -> (Nothing, [])
-              move = fmap (maybeToMaybe fst . fst) . move'
+              move = fmap ((>>= fst) . fst) . move'
           in move' Next >>= \mt -> do
               return $ case mt of
                     (Just (t, ind), ls) -> 
@@ -659,7 +659,7 @@ motionKeys xpc tgs =
                     _ -> def
       )
     | (nk, n) <- numberKeys
-    , (wk, dir, gfun, sx) <- [(wk', dir', maybeToMaybe G.bases . maybeToMaybe G.current, \n -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt n)
+    , (wk, dir, gfun, sx) <- [(wk', dir', (>>= G.bases) . (>>= G.current), \n -> sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.focusGroupAt n)
                              | (wk', dir') <- [("k", Prev), ("j", Next)]]
                              ++
                              [(wk', dir', id, \n -> sendMessage $ G.Modify $ G.focusGroupAt n)
@@ -747,7 +747,7 @@ struct gfun n = do
                  Just (G.Node (W.Stack f u d)) -> concatMap G.flattened $ take n $ [f]++d
                  _ -> []
     return ls
-groupList = struct (maybeToMaybe G.bases . maybeToMaybe G.current)
+groupList = struct ((>>= G.bases) . (>>= G.current))
 columnList = struct id
 structKeys gk = 
     [ (nk++fk, xls)

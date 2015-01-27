@@ -9,7 +9,6 @@ module XMonad.Vim.Routine
     , charToKeyStroke
     , joinStr
     , prepend
-    , maybeToMaybe
     , seqn
     , unescape
     , processKey
@@ -73,8 +72,6 @@ wrapList c = [c]
 
 prepend _ [] = []
 prepend t (x:l) = t:x:(prepend t l)
-
-maybeToMaybe = maybe Nothing
 
 seqn n = sequence_ . take n . repeat 
 

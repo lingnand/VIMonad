@@ -250,7 +250,7 @@ removeWorkspaces cmd tags = do
     let todel = filter ((`elem` tags).W.tag) $ W.integrate' wst
         (ttags, ntags) = partition (== tmpWorkspaceTag) tags
         (stags, ftags) = partition (`elem` allstags) ntags
-        nwt = maybeToMaybe (W.filter (not . (`elem` ftags))) wt
+        nwt = wt >>= W.filter (not . (`elem` ftags))
     cmd $ concatMap (W.integrate' . W.stack) todel
     case nwt of
          -- do a refilter and only view the workspace we are allowed to view
@@ -464,10 +464,10 @@ correctFocus a wins = do
             case (isf, f `elem` wins, mgs) of
                  (True, True, _) -> do 
                     -- nextMatch History $ isInCurrentWorkspace <&&> fmap not isFloating
-                    maybe (return ()) focus $ maybeToMaybe G.focal mgs 
+                    maybe (return ()) focus $ mgs >>= G.focal
                     -- focus to the current focus in the stack
                     a wins 
-                 (False, True, Just gs) -> let correctf = maybeToMaybe G.focal $ G.filter (not . (`elem` wins)) gs
+                 (False, True, Just gs) -> let correctf = G.filter (not . (`elem` wins)) gs >>= G.focal
                                            in maybe (return ()) focus correctf >> a wins
                  _ -> a wins
          _ -> a wins
@@ -600,7 +600,7 @@ enterVisualMode mode = withFocused $ \f -> do
             visualModeUpdateEndMarker win
         clear = do
             -- depending on the mode we will clear other selections
-            gs <- fmap (if mode == Col then id else maybeToMaybe G.bases) G.getCurrentGStack
+            gs <- fmap (if mode == Col then id else (>>= G.bases)) G.getCurrentGStack
             case gs of
                  Just (G.Node (W.Stack f u d)) -> return $ concatMap G.flattened $ u++d
                  _ -> return []
@@ -646,7 +646,7 @@ visualModeUpdateEndMarker w = do
                 (wb, we) <- case vm of
                                  Win -> return (w, w)
                                  -- row uses the bases function
-                                 Row -> fmap (maybeToMaybe G.bases) G.getCurrentGStack >>= return . maybe (w, w) rangeInGStacks
+                                 Row -> fmap (>>= G.bases) G.getCurrentGStack >>= return . maybe (w, w) rangeInGStacks
                                  Col -> G.getCurrentGStack >>= return . maybe (w, w) rangeInGStacks
                 VisualSelections (ac, pass) <- XS.get
                 VisualModeMarker mm <- XS.get 
@@ -707,8 +707,8 @@ getSelectedWindowStack' useFocusStackOnly = do
                     ([], uh:ul, _) -> (Just $ G.Node $ W.Stack uh ul dgs, mops)
                     _ -> (Nothing, mops)
         filterBase _ _ = (Nothing, Nothing)
-    mbases <- fmap (maybeToMaybe G.bases) G.getCurrentGStack 
-    let mb = if inv && not useFocusStackOnly then mbases else maybeToMaybe G.current mbases
+    mbases <- fmap (>>= G.bases) G.getCurrentGStack 
+    let mb = if inv && not useFocusStackOnly then mbases else (mbases >>= G.current)
     return $ if isNothing mb 
                then (Nothing, Nothing)
                else let bs = fromJust mb
