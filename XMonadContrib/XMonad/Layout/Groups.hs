@@ -76,6 +76,7 @@ module XMonad.Layout.Groups ( -- * Usage
                             , GroupsManageHook
                             , MultiStack(..)
                             , filter
+                            , filter'
                             , GStack
                             , toZipper
                             , fromZipper
@@ -343,7 +344,7 @@ focusWindow (Just a) = fromTags . map (tagBy (==a)) . W.integrate'
 
 -- Extension: save the information in a save location for the user to query upon
 -- we need a comprehensive way to save the information regarding the stack
-data MultiStack a = Leaf (Maybe (W.Stack a)) | Node (W.Stack (MultiStack a))
+data MultiStack a = Leaf (Zipper a) | Node (W.Stack (MultiStack a))
 deriving instance (Show a) => Show (MultiStack a)
 deriving instance (Read a) => Read (MultiStack a)
 deriving instance (Eq a) => Eq (MultiStack a)
@@ -359,19 +360,35 @@ deriving instance V.Traversable MultiStack
 
 type GStack = MultiStack Window
 
+stackRevFilter :: (a -> Bool) -> W.Stack a -> Maybe (W.Stack a)
+stackRevFilter p (W.Stack f ls rs) = case L.filter p (f:ls) of
+    f':ls' -> Just $ W.Stack f' ls' (L.filter p rs) -- maybe move focus up
+    []     -> case L.filter p rs of                  -- filter back down
+                    f':rs' -> Just $ W.Stack f' [] rs' -- else down
+                    []     -> Nothing
+
+-- returns a MultiStack of the same level, but filtered according to the default delete order
+filter :: (a -> Bool) -> MultiStack a -> MultiStack a
 filter fun (Node (W.Stack f u d)) = 
-    let f' = filter fun f
-        ft = fmap (filter fun)
-        u' = ft u
-        d' = ft d
-    in case W.filter isJust (W.Stack f' u' d') of
-            Just (W.Stack nf nu nd) -> Just $ Node $ W.Stack (fromJust nf) (fmap fromJust nu) (fmap fromJust nd)
-            _ -> Nothing
-filter fun (Leaf (Just s@(W.Stack f u d))) =
-    case W.filter fun s of
-         Just s' -> Just $ Leaf $ Just s'
-         _ -> Nothing
-filter _ _ = Nothing
+    let fil = filter fun
+        f' = fil f
+    in case W.filter (isJust . focal) (W.Stack f' (fil <$> u) (fil <$> d)) of
+            Just s -> Node s
+            -- if we don't have anything left that means f' will contain the minimal
+            -- structure holding a Leaf Nothing (with multiple wrapper levels)
+            _ -> Node (W.Stack f' [] [])
+filter fun (Leaf s) = Leaf $ s >>= W.filter fun
+
+-- reverse ordered filter
+filter' :: (a -> Bool) -> MultiStack a -> MultiStack a
+filter' fun (Node (W.Stack f u d)) = 
+    let fil = filter' fun
+        f' = fil f
+    in case stackRevFilter (isJust . focal) (W.Stack f' (fil <$> u) (fil <$> d)) of
+            Just s -> Node s
+            _ -> Node (W.Stack f' [] [])
+filter' fun (Leaf s) = Leaf $ s >>= stackRevFilter fun
+
 
 {-instance Functor MultiStack where-}
     {-fmap f (Leaf (Just (W.Stack f' u' d'))) = Leaf $ Just $ W.Stack (f f') (fmap f u') (fmap f d')-}

@@ -464,11 +464,11 @@ correctFocus a wins = do
             case (isf, f `elem` wins, mgs) of
                  (True, True, _) -> do 
                     -- nextMatch History $ isInCurrentWorkspace <&&> fmap not isFloating
-                    maybe (return ()) focus $ mgs >>= G.focal
+                    flip whenJust focus $ mgs >>= G.focal
                     -- focus to the current focus in the stack
                     a wins 
-                 (False, True, Just gs) -> let correctf = G.filter (not . (`elem` wins)) gs >>= G.focal
-                                           in maybe (return ()) focus correctf >> a wins
+                 (False, True, Just gs) -> let correctf = G.focal . G.filter (not . (`elem` wins)) $ gs
+                                           in whenJust correctf focus >> a wins
                  _ -> a wins
          _ -> a wins
 

@@ -995,7 +995,7 @@ layoutCommands tgs =
     [ ("C-S-"++k, applySelectedWindowStack True $ \s -> sendMessage $ G.Modify $ G.moveWindowsToGroupAt n s)
     | (k, n) <- columnKeys]
     ++
-    [ ("M1-S-"++k, fmap W.integrate' getSelectedWindowStackOnlyInFocusStack >>= \l -> getSourceIndexInCurrentBase l >>= maybe (return ()) (\si -> insertAt l si n))
+    [ ("M1-S-"++k, fmap W.integrate' getSelectedWindowStackOnlyInFocusStack >>= \l -> getSourceIndexInCurrentBase l >>= flip whenJust (\si -> insertAt l si n))
     | (k, n) <- tabKeys]
     ++
     [ ("M1-C-"++k, sendMessage $ G.ToFocused $ SomeMessage $ G.Modify $ G.swapWith n)
