@@ -123,7 +123,7 @@ Insertion of windows/workspaces emulate the relevant aspects from vim
 
 When a window is inserted, you can choose to keep the focus on the old window without switching to the new window
 
-* `M-C-x` toggles this behavior
+* `M-C-a` toggles this behavior
 * for some commands, an additional `g` *temporarily* toggles this behavior as well
 
 ## Keys
@@ -350,7 +350,9 @@ These commands operate on
 3. or the currently focused window
 
 * `['<reg>]x`: [delete](#delete) counterpart for selection
-* `['<reg>]X`: [move](#move) counterpart for selection
+* `['<reg>]X`: same as `['<reg>]x`, but focuses the previous window after deleting the selected ones
+* `['<reg>]C-x`: [move](#move) counterpart for selection
+* `['<reg>]C-S-x`: same as `['<reg>]C-x`, but focuses the previous window after moving the selected ones
 * `y<reg>`: [yank](#yank) counterpart for selection
 * `M-S-u`: [unregister](#unregister) counterpart for selection
 * `M-S-j`: move the selected windows down a line
