@@ -767,8 +767,10 @@ wssKeys =
 cutCommands xpc tgs = concatMap (processKey . addPrefix) $
     [ (regk++dc, da)
     | (regk, ta, add, _, _) <- [regUnnamedKey]++ quoteRefed (regKeys ++ regPromptKeys' xpc "Cut windows to register: " "Add windows to register: ")
-    , (pk, cutcmd) <- [("d", delete), ("m", cut)]
-    , cmd <- [\ls -> ta $ \t -> cutcmd add t ls]
+    , (pk, cutcmd') <- [("d", deleteWithFilter), ("m", cutWithFilter)]
+    , let cutcmd = cutcmd' G.filter
+          cmdop c ls = ta $ \t -> c add t ls
+          cmd = cmdop cutcmd
     , (dc, da) <- -- deletion
                   [ (fk, xls >>= cmd >> refresh)
                   | (fk, xls) <- [ (pk++" "++mk, xls')
@@ -819,7 +821,11 @@ cutCommands xpc tgs = concatMap (processKey . addPrefix) $
                   , (dk, dir) <- [("[", Prev), ("]", Next)]
                   ]
                   ++
-                  [ ((if pk == "d" then "" else "S-")++"x", onSelectedWindows cmd >> refresh) ]
+                  -- special operator 'x' for delete
+                  [ (pcmd++px++"x", onSelectedWindows (cmdop $ cutcmd' fil) >> refresh) 
+                  | (px, fil) <- [("", G.filter), ("S-", G.filter')]
+                  , let pcmd = if pk == "d" then "" else "C-"
+                  ]
     ]
 
 yankCommands xpc tgs = concatMap (processKey . addPrefix) $
@@ -1032,7 +1038,7 @@ layoutCommands tgs =
     --     h <- getCurrentWorkspaceHandle 
     --     toggleAutoArrangeWorkspace h)
     -- toggle insert older
-    , ("M-C-x", toggleInsertOlder >> runLogHook)
+    , ("M-C-a", toggleInsertOlder >> runLogHook)
     -- force insert older, while remembering the old toggle
     , ("M-M1-s", toggleInsertOlderForce)
     -- recover for the old toggle
@@ -1238,7 +1244,7 @@ paste invertInsert xls register = do
                  True -> shiftWindowsHereAndFocusLast Nothing wins
        else return ()
 
-cut add register ls = flip correctFocus ls $ \wins -> do
+cutWithFilter fil add register ls = flip (correctFocus' fil) ls $ \wins -> do
                         deleteWindowsSelection wins
                         -- we only minimize the windows if they are NOT already minimized
                         mwins <- getMinimizedWindows
@@ -1260,8 +1266,11 @@ cut add register ls = flip correctFocus ls $ \wins -> do
                                 -- pushing these windows into 1, 1->2, 9 out of the memory
                                 in mvWindows "1" mv wins 
                         putWindowsIntoRegister False "\"" wins 
+cut = cutWithFilter G.filter
 
-delete add register ls = if register == "" then killWindows ls else cut add register ls
+deleteWithFilter fil add "" ls = killWindowsWithFilter fil ls 
+deleteWithFilter fil add register ls = cutWithFilter fil add register ls
+delete = deleteWithFilter G.filter
 yank add register ls = do
     putWindowsIntoRegister add register ls 
     putWindowsIntoRegister False "\"" ls 

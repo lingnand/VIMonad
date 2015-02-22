@@ -47,7 +47,9 @@ module XMonad.Vim.Workspaces
     -- operations
     , deminimizeFocus
     , killWindows
+    , killWindowsWithFilter
     , correctFocus
+    , correctFocus'
     , shiftWindowsHere
     , shiftWindowsHereAndFocusLast
     , shiftWins
@@ -447,14 +449,17 @@ deminimizeFocus w = do
     deminimizeWindow w 
     focus w
 
-killWindows ls = flip correctFocus ls $ \wins -> do
+killWindowsWithFilter f ls = flip (correctFocus' f) ls $ \wins -> do
     deleteWindowsSelection wins
     removeMinimizedState wins
     -- now just kill all windows that 
     mapM_ killWindow wins
 
-correctFocus a [] = a []
-correctFocus a wins = do
+killWindows = killWindowsWithFilter G.filter
+
+correctFocus = correctFocus' G.filter
+correctFocus' fil a [] = a []
+correctFocus' fil a wins = do
     -- first extract the focus
     mf <- gets (W.peek . windowset)
     case mf of
@@ -467,7 +472,7 @@ correctFocus a wins = do
                     flip whenJust focus $ mgs >>= G.focal
                     -- focus to the current focus in the stack
                     a wins 
-                 (False, True, Just gs) -> let correctf = G.focal . G.filter (not . (`elem` wins)) $ gs
+                 (False, True, Just gs) -> let correctf = G.focal . fil (not . (`elem` wins)) $ gs
                                            in whenJust correctf focus >> a wins
                  _ -> a wins
          _ -> a wins
