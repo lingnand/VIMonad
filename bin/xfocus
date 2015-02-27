@@ -1,0 +1,4 @@
+# /bin/sh
+# activate a given window by pid
+xtitle "$1" > ~/.xmonad/.xfocus
+xdotool key --clearmodifiers "Hyper_L+ctrl+alt+x"

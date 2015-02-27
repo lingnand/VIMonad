@@ -1139,10 +1139,10 @@ miscCommands myModMask xpc toggleFadeSet =
     , ("M-S-<U>", withFocused $ keysAbsResizeWindow (0,-10) (0,0))
     , ("M-S-<D>", withFocused $ keysAbsResizeWindow (0,10) (0,0))
     , ("M-g u", U.withUrgents $ flip whenJust deminimizeFocus . listToMaybe)
-    -- ugly interface to window activate, which tries to activate the window given by the title under ~/.xmonad/.winactivate
+    -- ugly interface to window focus, which tries to focus the window given by the title under ~/.xmonad/.xfocus
     , ("M-C-M1-x", do
             home <- io getHomeDirectory
-            lns <- fmap lines $ io (readFile $ home ++ "/.xmonad/.winactivate") `catchX` (return "")
+            lns <- fmap lines $ io (readFile $ home ++ "/.xmonad/.xfocus") `catchX` (return "")
             case lns of
                  h:_ -> deminimizeFocus (read h) `catchX` (return ())
                  _ -> return ()
