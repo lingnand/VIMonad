@@ -345,7 +345,7 @@ dpromptComplFunc c cmds home hist cimdb precompl myScriptsDir s
           p as@("git":_:_) = trycmp [output "git" $ ["log", "--grep", last as], scopecmp, shellcmp]
           p _ = trycmp [scopecmp, shellcmp]
 
-cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "gvim"]
+cmdsWithGUI = ["chromium", "firefox", "xterm", "xeval", "retroarch", "gimp", "inkscape", "libreoffice", "xvim", "xmutt", "zathura", "vimb", "vb", "intellij-idea-ultimate-edition", "gvim", "fba", "gba"]
 dpromptAction c cmds home hist cimdb myScriptsDir immi final owi history str = 
     -- perform some special actions on some commands
     let (silent, args, s) = case parseShellArgs str of
