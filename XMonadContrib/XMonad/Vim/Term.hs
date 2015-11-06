@@ -21,11 +21,11 @@ import XMonad.Vim.WorkspaceDirectories
 import XMonad.Vim.Constants
 
 -- a relaxed version of uniqueTermHasCmd that also includes terminals that are not instances of UniqueTerm
-isTerm = className =? "XTerm" 
+isTerm = className =? "XTerm"  <||> className =? "URxvt"
 hasCmd c = fmap (any (c `isInfixOf`)) $ getQuery wM_COMMAND
 isTermWithCmd c = isTerm <&&> hasCmd c
 -- query bool definition for recyclable terminals
-isRecyclableTerm = className =? "XTerm" <&&> appName =? "xterm" <&&> ( title =? "zsh -i" <||> do
+isRecyclableTerm = ((className =? "XTerm" <&&> appName =? "xterm") <||> (className =? "URxvt" <&&> appName =? "urxvt")) <&&> ( title =? "zsh -i" <||> do
     mach <- stringProperty "WM_CLIENT_MACHINE" 
     user <- io $ getLoginName
     fmap (isPrefixOf $ user++"@"++mach++":") title )
