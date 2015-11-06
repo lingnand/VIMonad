@@ -67,10 +67,14 @@ taskLines :: [String] -> [String]
 taskLines = filter (\l -> isTaskIdLine l || isUUIDLine l) 
 ---- assuming l is already identified as some output
 lastId c = breakAt (\c -> c `elem` ",: ") c  
+
+isTaskIdLine :: String -> Bool
 isTaskIdLine l = (l =~ "^\\s*[0-9]+ +.*[a-zA-Z]+") && not (l =~ "^\\s*[0-9]+ tasks?\\s*$")
+
 taskIdFromLine = head . words
 
 -- open line related functions
+isOpenLine :: String -> Bool
 isOpenLine l = l =~ "^[0-9]+\\) .* \\(\".*\"\\)$"
 indexFromOpenLine l = reverse $ tail $ reverse $ head $ words l
 parseOpen args = do fmap lines $ runProcessWithInput "~/.tk/tkparseopen_compl" args ""    
