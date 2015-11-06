@@ -32,7 +32,6 @@ module XMonad.Core (
 import XMonad.StackSet hiding (modify)
 
 import Prelude
-import Codec.Binary.UTF8.String (encodeString)
 import Control.Exception.Extensible (fromException, try, bracket, throw, finally, SomeException(..))
 import qualified Control.Exception.Extensible as E
 import Control.Applicative
@@ -115,6 +114,8 @@ data XConfig l = XConfig
     , clickJustFocuses   :: !Bool                -- ^ False to make a click which changes focus to be additionally passed to the window
     , clientMask         :: !EventMask           -- ^ The client events that xmonad is interested in
     , rootMask           :: !EventMask           -- ^ The root events that xmonad is interested in
+    , handleExtraArgs    :: !([String] -> XConfig Layout -> IO (XConfig Layout))
+                                                 -- ^ Modify the configuration, complain about extra arguments etc. with arguments that are not handled by default
     }
 
 

@@ -52,6 +52,7 @@ library
                         XMonad.ManageHook
                         XMonad.Operations
                         XMonad.StackSet
+    other-modules:      Paths_xmonad
 
     build-depends: base < 5 && >=3,
                    containers,
@@ -59,10 +60,11 @@ library
                    directory,
                    extensible-exceptions,
                    filepath,
+                   setlocale,
                    mtl,
                    process,
                    unix,
-                   utf8-string >= 0.3 && < 0.4,
+                   utf8-string >= 0.3 && < 1.1,
                    X11>=1.5 && < 1.7
 
     if true
@@ -70,6 +72,10 @@ library
 
     if impl(ghc >= 6.12.1)
         ghc-options:        -fno-warn-unused-do-bind
+    if impl(ghc < 7.0.0)
+        extensions: UndecidableInstances
+        -- needed for XMonad.Config's instance Default (XConfig a)
+
 
     ghc-prof-options:   -prof -auto-all
 
