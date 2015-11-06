@@ -1,6 +1,7 @@
 {-#
   LANGUAGE ScopedTypeVariables, GeneralizedNewtypeDeriving,
-  FlexibleInstances, MultiParamTypeClasses
+  FlexibleInstances, MultiParamTypeClasses,
+  FlexibleContexts -- ghc-6.12 only
   #-}
 -----------------------------------------------------------------------------
 -- |
@@ -25,8 +26,8 @@ module XMonad.Util.WindowState ( -- * Usage
 import XMonad hiding (get, put, modify)
 import Control.Monad.Reader(ReaderT(..))
 import Control.Monad.State.Class
-import Data.Typeable (Typeable, typeOf)
-import Control.Applicative((<$>))
+import Data.Typeable (typeOf)
+import Control.Applicative((<$>), Applicative)
 -- $usage
 --
 -- This module allow to store state data with some 'Window'.
@@ -54,7 +55,7 @@ import Control.Applicative((<$>))
 -- window.
 newtype StateQuery s a = StateQuery {
       getQuery :: Query a
-    } deriving (Monad, MonadIO, Functor)
+    } deriving (Monad, MonadIO, Applicative, Functor)
 
 packIntoQuery :: (Window -> X a) -> Query a
 packIntoQuery = Query . ReaderT

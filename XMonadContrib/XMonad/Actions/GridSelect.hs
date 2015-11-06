@@ -39,6 +39,7 @@ module XMonad.Actions.GridSelect (
     bringSelected,
     goToSelected,
     gridselectWorkspace,
+    gridselectWorkspace',
     spawnSelected,
     runSelectedAction,
 
@@ -65,6 +66,12 @@ module XMonad.Actions.GridSelect (
     select,
     cancel,
     transformSearchString,
+
+    -- * Rearrangers
+    -- $rearrangers
+    Rearranger,
+    noRearranger,
+    searchStringRearrangerGenerator,
 
     -- * Screenshots
     -- $screenshots
@@ -196,6 +203,7 @@ data GSConfig a = GSConfig {
       gs_colorizer :: a -> Bool -> X (String, String),
       gs_font :: String,
       gs_navigate :: TwoD a (Maybe a),
+      gs_rearranger :: Rearranger a,
       gs_originFractX :: Double,
       gs_originFractY :: Double
 }
@@ -238,13 +246,18 @@ data TwoDState a = TwoDState { td_curpos :: TwoDPosition
                              , td_paneY :: Integer
                              , td_drawingWin :: Window
                              , td_searchString :: String
+                             , td_elementmap :: TwoDElementMap a
                              }
 
-td_elementmap :: TwoDState a -> [(TwoDPosition,(String,a))]
-td_elementmap s = zipWith (,) positions sortedElements
+generateElementmap :: TwoDState a -> X (TwoDElementMap a)
+generateElementmap s = do
+    rearrangedElements <- rearranger searchString sortedElements
+    return $ zip positions rearrangedElements
   where
     TwoDState {td_availSlots = positions,
+               td_gsconfig = gsconfig,
                td_searchString = searchString} = s
+    GSConfig {gs_rearranger = rearranger} = gsconfig
     -- Filter out any elements that don't contain the searchString (case insensitive)
     filteredElements = L.filter ((searchString `isInfixOfI`) . fst) (td_elements s)
     -- Sorts the elementmap
@@ -337,11 +350,11 @@ updateAllElements =
       s <- get
       updateElements (td_elementmap s)
 
-grayoutAllElements :: TwoD a ()
-grayoutAllElements =
+grayoutElements :: Int -> TwoD a ()
+grayoutElements skip =
     do
       s <- get
-      updateElementsWithColorizer grayOnly (td_elementmap s)
+      updateElementsWithColorizer grayOnly $ drop skip (td_elementmap s)
     where grayOnly _ _ = return ("#808080", "#808080")
 
 updateElements :: TwoDElementMap a -> TwoD a ()
@@ -377,7 +390,7 @@ stdHandle :: Event -> TwoD a (Maybe a) -> TwoD a (Maybe a)
 stdHandle (ButtonEvent { ev_event_type = t, ev_x = x, ev_y = y }) contEventloop
     | t == buttonRelease = do
         s @  TwoDState { td_paneX = px, td_paneY = py,
-                         td_gsconfig = (GSConfig ch cw _ _ _ _ _ _) } <- get
+                         td_gsconfig = (GSConfig ch cw _ _ _ _ _ _ _) } <- get
         let gridX = (fi x - (px - cw) `div` 2) `div` cw
             gridY = (fi y - (py - ch) `div` 2) `div` ch
         case lookup (gridX,gridY) (td_elementmap s) of
@@ -473,11 +486,17 @@ transformSearchString f = do
           let oldSearchString = td_searchString s
               newSearchString = f oldSearchString
           when (newSearchString /= oldSearchString) $ do
-            -- FIXME: grayoutAllElements + updateAllElements paint some fields twice causing flickering
-            --        we would need a much smarter update strategy to fix that
-            when (length newSearchString > length oldSearchString) grayoutAllElements
             -- FIXME curpos might end up outside new bounds
-            put s { td_searchString = newSearchString }
+            let s' = s { td_searchString = newSearchString }
+            m <- liftX $ generateElementmap s'
+            let s'' = s' { td_elementmap = m }
+                oldLen = length $ td_elementmap s
+                newLen = length $ td_elementmap s''
+            -- All the elements in the previous element map should be
+            -- grayed out, except for those which will be covered by
+            -- elements in the new element map.
+            when (newLen < oldLen) $ grayoutElements newLen
+            put s''
             updateAllElements
 
 -- | By default gridselect used the defaultNavigation action, which
@@ -628,16 +647,16 @@ gridselect _ [] = return Nothing
 gridselect gsconfig elements =
  withDisplay $ \dpy -> do
     rootw <- asks theRoot
-    s <- gets $ screenRect . W.screenDetail . W.current . windowset
+    scr <- gets $ screenRect . W.screenDetail . W.current . windowset
     win <- liftIO $ mkUnmanagedWindow dpy (defaultScreenOfDisplay dpy) rootw
-                    (rect_x s) (rect_y s) (rect_width s) (rect_height s)
+                    (rect_x scr) (rect_y scr) (rect_width scr) (rect_height scr)
     liftIO $ mapWindow dpy win
     liftIO $ selectInput dpy win (exposureMask .|. keyPressMask .|. buttonReleaseMask)
     status <- io $ grabKeyboard dpy win True grabModeAsync grabModeAsync currentTime
     io $ grabButton dpy button1 anyModifier win True buttonReleaseMask grabModeAsync grabModeAsync none none
     font <- initXMF (gs_font gsconfig)
-    let screenWidth = toInteger $ rect_width s;
-        screenHeight = toInteger $ rect_height s;
+    let screenWidth = toInteger $ rect_width scr
+        screenHeight = toInteger $ rect_height scr
     selectedElement <- if (status == grabSuccess) then do
                             let restriction ss cs = (fromInteger ss/fromInteger (cs gsconfig)-1)/2 :: Double
                                 restrictX = floor $ restriction screenWidth gs_cellwidth
@@ -645,16 +664,19 @@ gridselect gsconfig elements =
                                 originPosX = floor $ ((gs_originFractX gsconfig) - (1/2)) * 2 * fromIntegral restrictX
                                 originPosY = floor $ ((gs_originFractY gsconfig) - (1/2)) * 2 * fromIntegral restrictY
                                 coords = diamondRestrict restrictX restrictY originPosX originPosY
-
-                            evalTwoD (updateAllElements >> (gs_navigate gsconfig)) TwoDState { td_curpos = (head coords),
-                                                                                  td_availSlots = coords,
-                                                                                  td_elements = elements,
-                                                                                  td_gsconfig = gsconfig,
-                                                                                  td_font = font,
-                                                                                  td_paneX = screenWidth,
-                                                                                  td_paneY = screenHeight,
-                                                                                  td_drawingWin = win,
-                                                                                  td_searchString = "" }
+                                s = TwoDState { td_curpos = (head coords),
+                                                td_availSlots = coords,
+                                                td_elements = elements,
+                                                td_gsconfig = gsconfig,
+                                                td_font = font,
+                                                td_paneX = screenWidth,
+                                                td_paneY = screenHeight,
+                                                td_drawingWin = win,
+                                                td_searchString = "",
+                                                td_elementmap = [] }
+                            m <- generateElementmap s
+                            evalTwoD (updateAllElements >> (gs_navigate gsconfig))
+                                     (s { td_elementmap = m })
                       else
                           return Nothing
     liftIO $ do
@@ -691,7 +713,7 @@ decorateName' w = do
 
 -- | Builds a default gs config from a colorizer function.
 buildDefaultGSConfig :: (a -> Bool -> X (String,String)) -> GSConfig a
-buildDefaultGSConfig col = GSConfig 50 130 10 col "xft:Sans-8" defaultNavigation (1/2) (1/2)
+buildDefaultGSConfig col = GSConfig 50 130 10 col "xft:Sans-8" defaultNavigation noRearranger (1/2) (1/2)
 
 borderColor :: String
 borderColor = "white"
@@ -727,6 +749,44 @@ runSelectedAction conf actions = do
 -- > gridselectWorkspace (\ws -> W.greedyView ws . W.shift ws)
 gridselectWorkspace :: GSConfig WorkspaceId ->
                           (WorkspaceId -> WindowSet -> WindowSet) -> X ()
-gridselectWorkspace conf viewFunc = withWindowSet $ \ws -> do
+gridselectWorkspace conf viewFunc = gridselectWorkspace' conf (windows . viewFunc)
+
+-- | Select a workspace and run an arbitrary action on it.
+gridselectWorkspace' :: GSConfig WorkspaceId -> (WorkspaceId -> X ()) -> X ()
+gridselectWorkspace' conf func = withWindowSet $ \ws -> do
     let wss = map W.tag $ W.hidden ws ++ map W.workspace (W.current ws : W.visible ws)
-    gridselect conf (zip wss wss) >>= flip whenJust (windows . viewFunc)
+    gridselect conf (zip wss wss) >>= flip whenJust func
+
+-- $rearrangers
+--
+-- Rearrangers allow for arbitrary post-filter rearranging of the grid
+-- elements.
+--
+-- For example, to be able to switch to a new dynamic workspace by typing
+-- in its name, you can use the following keybinding action:
+--
+-- > import XMonad.Actions.DynamicWorkspaces (addWorkspace)
+-- >
+-- > gridselectWorkspace' defaultGSConfig
+-- >                          { gs_navigate   = navNSearch
+-- >                          , gs_rearranger = searchStringRearrangerGenerator id
+-- >                          }
+-- >                      addWorkspace
+
+-- | A function taking the search string and a list of elements, and
+-- returning a potentially rearranged list of elements.
+type Rearranger a = String -> [(String, a)] -> X [(String, a)]
+
+-- | A rearranger that leaves the elements unmodified.
+noRearranger :: Rearranger a
+noRearranger _ = return
+
+-- | A generator for rearrangers that append a single element based on the
+-- search string, if doing so would not be redundant (empty string or value
+-- already present).
+searchStringRearrangerGenerator :: (String -> a) -> Rearranger a
+searchStringRearrangerGenerator f =
+    let r "" xs                       = return $ xs
+        r s  xs | s `elem` map fst xs = return $ xs
+                | otherwise           = return $ xs ++ [(s, f s)]
+    in r
