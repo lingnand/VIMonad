@@ -22,7 +22,6 @@ import XMonad.Hooks.OnWindowsInserted
 import XMonad.Vim.Routine
 import Data.Maybe
 import XMonad.Prompt.TaskPrompt
-import XMonad.Prompt.RPCPrompt
 import XMonad.Vim.WorkspaceDirectories
 import XMonad.Util.Run
 import XMonad.Vim.Tag
@@ -58,7 +57,7 @@ isOutput = (>= outputWidth) . length
 limitSpace l str = take l $ str ++ repeat ' '
 
 try' f _ [] = Nothing
-try' f b (h:l) = maybe (try' f (h:b) l) Just (f (reverse b) h l)
+try' f b (h:l) = f (reverse b) h l <|> try' f (h:b) l
 
 try:: ([a] -> a -> [a] -> Maybe b) -> [a] -> Maybe b
 try = flip try' []
@@ -95,7 +94,7 @@ filterDiffOutput ls = case findIndex (isPrefixOf "--- ") ls of
                             _ -> []
 -- for cim
 breakCIMSuggestion s = case break (=='\'') s of
-                            (bef, _:ccs) | all (\c -> c >= 'a' && c <= 'z') bef, all (not . isAscii) ccs -> Just (bef, ccs)
+                            (bef, _:ccs) | all isAsciiLower bef, all (not . isAscii) ccs -> Just (bef, ccs)
                             _ -> Nothing
 breakCIMSuggestions [] = Just []
 breakCIMSuggestions (h:l)
@@ -154,7 +153,6 @@ dynamicPromptWidgets = [
       , dwgtDictMode modernCHSDMode "sdcv-modernChinese"
       , dwgtDictMode bigCHSDMode "sdcv-bigChinese"
       , dwgt TaskPrompt "tk" (\c -> taskComplFunc) taskAction'
-      , dwgt RPCPrompt "rpc" rpcComplFunc rpcAction'
       , dwgt CalcMode "calc" (\_ -> completionFunction CalcMode) calcAction'
     ]
 
@@ -372,7 +370,7 @@ dpromptAction c cmds home hist cimdb myScriptsDir immi final owi history str =
                               run = myScriptsDir++"/dphandler" ++" "++s'
                           -- if the file does not exist but it is not one of the commands
                           -- then we can pretty much assume that it's a new file to be created
-                          if fe || not (uha `elem` cmds) || ha `elem` cmdsWithGUI
+                          if fe || uha `notElem` cmds || ha `elem` cmdsWithGUI
                              then do
                                   applyOnWindowsInserted owi {
                                             numberOfWindows = 1
@@ -381,9 +379,8 @@ dpromptAction c cmds home hist cimdb myScriptsDir immi final owi history str =
                                               final
                                       }
                                   spawn run >> immi
-                             else do
+                             else if silent then spawn run >> follow
                                  -- we check if the user has silent as the first argument
-                                 if silent then spawn run >> follow
                                            else do precompl <- map (limitSpace outputWidth) . lines <$> (runEvaluation run)
                                                    dynamicPrompt' c cmds home history hist cimdb precompl immi final owi
                where chdir d = do
@@ -433,7 +430,7 @@ dynamicPrompt' c cmds home history hist cimdb precompl immi final owi = do
 
 -- cycling between different dictionary
 defaultDictionaries = ["sdcv-Collins", "sdcv-Moby", "sdcv-bigChinese", "sdcv-modernChinese"]
-dpromptPrefices = defaultDictionaries ++ ["vb", "calc", "tk", "rpc"]
+dpromptPrefices = defaultDictionaries ++ ["vb", "calc", "tk"]
 cycleDictionaryForDPrompt dir = do
     str <- getInput
     let ls = (if dir == Next then id else reverse) defaultDictionaries

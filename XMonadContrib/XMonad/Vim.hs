@@ -1067,15 +1067,6 @@ mkDynamicPrompt' myModMask xpc statusCleanupCmd cimdb immediate final owi = init
                 -- shift + d
                 , ((myModMask .|. shiftMask, xK_D), cycleDictionaryForDPrompt Prev)
                 , ((myModMask, xK_d), cycleDictionaryForDPrompt Next)
-                -- fmd related
-                , ((myModMask, xK_r), addOrTruncateTillPrefix "rpc ")
-                , ((myModMask, xK_n), setInputAndDone "rpc next")
-                , ((myModMask, xK_a), setInputAndDone "sil [ \"`rpc info '%r'`\" = 1 ] && rpc unrate || rpc rate")
-                , ((myModMask, xK_u), setInputAndDone "rpc ban")
-                , ((myModMask, xK_t), setInputAndDone "rpc toggle")
-                , ((myModMask, xK_s), setInput "rpc setch " >> endOfLine)
-                , ((myModMask, xK_x), setInputAndDone "rpc end")
-                , ((myModMask, xK_w), setInputAndDone "rpc webpage")
                 -- system related
                 -- suspend after one sec to avoid keyboard-mashing to wake up the machine again
                 -- , ((myModMask, xK_l), setInputAndDone "sleep 1; systemctl suspend")
